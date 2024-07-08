@@ -18,21 +18,29 @@ The configuration file will use the following information:
 * port: The port the client will be listening on. Acceptable port range (1024, 6553).
 
 Commands:
+
 CONNECT \<ip:port\>
 * Connect to a peer
+
 DISCONNECT \<ip:port\>
 * Disconnect from a peer
+  
 ADDPACKAGE \<file\>
 * Adds a package to the program's list of managed packages. This should be a .bpkg file.
+  
 REMPACKAGE \<ident, 20 char matching\>
 * Removes a package based on the provided identifier
+  
 PACKAGES
 * Views all managed packages.
+  
 PEERS
 * View all connected peers.
+  
 FETCH \<ip:port\> \<identifie\r> \<hash\> (\<offset\>)
 * Requests chunks related to the hash given from the provided peer. If offset is specified, it will use t
 his additional info to narrow down a hash at a particular offset of the file.
+
 QUIT
 * Closes the program
 
