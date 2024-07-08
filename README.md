@@ -9,7 +9,7 @@ having been hashed).
 
 These .bpkg files can be created using the pkgmake program, and should be distributed to allow file transfer.
 
-Program is run using './btide <config file name>'
+Program is run using './btide \<config file name\>'
 
 The configuration file will use the following information: 
 * directory: path local to the system that store .bpkg files and the files that are mapped in there.
