@@ -2,7 +2,7 @@
 Peer-to-peer file transfer program for Unix systems using SHA-256 hashing and 
 merkle tree structure for file validation. 
 
-# Progrma information
+# Program information
 The program relies on package files (.bpkg), which outline the metadata of the
  specific file it refers to. 
 This includes an identifier, filename, size, nhashes (number of SHA-256 hashes),
