@@ -1,5 +1,5 @@
 # p2p_file_transfer
-Peer-to-peer file transfer system using SHA-256 hashing and merkle tree structure for file validation. 
+Peer-to-peer file transfer program for Unix systems using SHA-256 hashing and merkle tree structure for file validation. 
 
 Program structure
 The program relies on package files (.bpkg), which outline the metadata of the specific file it refers to. 
