@@ -31,31 +31,46 @@ create it.
 
 # Commands
 ```bash
-CONNECT \<ip:port\>
+CONNECT <ip:port>
 ```
 * Connect to a peer
 
-DISCONNECT \<ip:port\>
+```bash
+DISCONNECT <ip:port>
+```
 * Disconnect from a peer
   
-ADDPACKAGE \<file\>
+```bash
+ADDPACKAGE <filename>
+```
 * Adds a package to the program's list of managed packages. This is a .bpkg file.
-  
-REMPACKAGE \<ident, 20 char matching\>
+
+```bash
+REMPACKAGE <ident, 20 char matching>
+```
 * Removes a package based on the provided identifier
   
+```bash
 PACKAGES
+```
 * Views all managed packages.
   
+```bash
 PEERS
+```
 * View all connected peers.
+
   
-FETCH \<ip:port\> \<identifie\r> \<hash\> (\<offset\>)
+```bash
+FETCH <ip:port> <identifier> <hash> (<offset>)
+```
 * Requests chunks related to the hash given from the provided peer. If offset is
  specified, it will use this additional info to narrow down a hash at a 
  particular offset of the file.
 
+```bash
 QUIT
+```
 * Closes the program
 
 # Organisation of software
