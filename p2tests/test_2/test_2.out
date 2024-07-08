@@ -1,0 +1,13 @@
+Missing file argument
+Cannot open file
+Unable to parse bpkg file
+No packages managed
+1. 0793dcc6db4623df398a7fbe4ebcf223, p2tests/test_2/test/test.dat : COMPLETED
+1. 0793dcc6db4623df398a7fbe4ebcf223, p2tests/test_2/test/test.dat : COMPLETED
+2. e21a95edac1d2844fbcc7f40b9bd9b97, p2tests/test_2/test/test2.dat : INCOMPLETE
+Missing identifier argument, please specify whole 1024 character or at least 20 characters
+Identifier provided does not match managed packages
+Package has been removed
+1. e21a95edac1d2844fbcc7f40b9bd9b97, p2tests/test_2/test/test2.dat : INCOMPLETE
+Package has been removed
+No packages managed

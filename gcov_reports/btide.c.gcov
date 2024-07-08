@@ -1,0 +1,426 @@
+        -:    0:Source:src/btide.c
+        -:    1:#define _DEFAULT_SOURCE
+        -:    2:#include <stdio.h>
+        -:    3:#include <stdlib.h>
+        -:    4:#include <unistd.h>
+        -:    5:#include "config.c"
+        -:    6:#include "peer.h"
+        -:    7:#include "cli.h"
+        -:    8:#include "dyn_array.h"
+        -:    9:
+        -:   10:#define MAX_DIR_LEN 4096
+        -:   11:#define MAX_COMMAND_LEN 5520
+        -:   12:#define MAX_ADDRESS_LEN 100
+        -:   13:
+        -:   14://
+        -:   15:// PART 2
+        -:   16://
+        -:   17:
+        -:   18:/* 
+        -:   19: * This thread acts as the main thread that creates client threads and sockets
+        -:   20: * when it wants to connect with a peer. Is also responsible for input parsing 
+        -:   21: * different commands.
+        -:   22: */ 
+       15:   23:int main(int argc, char** argv) {
+       15:   24:    signal(SIGPIPE, SIG_IGN);
+        -:   25:    
+        -:   26:    // Read from config file
+       15:   27:    if (argc < 2) {
+    #####:   28:        printf("Usage: ./btide <config file>\n");
+    #####:   29:        exit(1);
+        -:   30:    }
+        -:   31:
+       15:   32:    char* config_path = argv[1];
+        -:   33:
+       15:   34:    char directory[MAX_DIR_LEN] = {0};
+       15:   35:    int max_peers = 0;
+       15:   36:    uint16_t port = 0;
+        -:   37:
+       15:   38:    int parse_config_result = parse_config(config_path, directory,
+        -:   39:                                             &max_peers, &port);
+        -:   40:    
+        -:   41:    // Main program needs to maintain a list of all connections in memory
+        -:   42:    // This will be passed to all threads 
+        -:   43:    struct dynamic_connection_array *connections = 
+       15:   44:    create_dynamic_connection_array(max_peers);
+        -:   45:
+        -:   46:    // Needs to maintain a list of packages in memory
+        -:   47:    struct dynamic_package_array *packages = 
+       15:   48:    create_dynamic_package_array();
+        -:   49:
+        -:   50:    // Array to store all created threads
+       15:   51:    struct thread_array *threads = create_thread_array();
+        -:   52:    
+       15:   53:    if (parse_config_result != 0) {
+        -:   54:        // Exit with corresponding error code
+        2:   55:        free_dynamic_connection_array(connections);
+        2:   56:        free_dynamic_package_array(packages);
+        2:   57:        free_thread_array(threads);
+        2:   58:        exit(parse_config_result);
+        -:   59:    }
+        -:   60:
+        -:   61:    // Move into the specified directory
+       13:   62:    chdir(directory); 
+        -:   63:
+        -:   64:    // Start server
+       13:   65:    int server_sock_fd = init_server_socket((port));
+        -:   66:    
+        -:   67:    // Pass the required information to the server thread
+       12:   68:    struct server_loop_arguments args = {server_sock_fd, port, max_peers, 
+        -:   69:                                        connections, packages, threads};
+        -:   70:    
+        -:   71:    // Start server thread
+       12:   72:    pthread_t server_thread;
+        -:   73:    // Use the port and max peers from the config
+       12:   74:    if (pthread_create(&server_thread, NULL, server_loop, &args) != 0) {
+    #####:   75:        printf("error\n");
+    #####:   76:        free_dynamic_connection_array(connections);
+    #####:   77:        free_dynamic_package_array(packages);
+    #####:   78:        free_thread_array(threads);
+    #####:   79:        return -1;
+        -:   80:    }
+        -:   81:
+        -:   82:    // Buffer to store trailing characters
+       12:   83:    char trailing[MAX_LINE_LENGTH] = {0};
+        -:   84:
+        -:   85:    // Input loop
+       12:   86:    char buffer[MAX_COMMAND_LEN] = {0};
+       66:   87:    while (fgets(buffer, MAX_COMMAND_LEN, stdin) != NULL) {
+        -:   88:
+        -:   89:        // Get command type
+       65:   90:        char buffer_copy[MAX_COMMAND_LEN] = {0};
+       65:   91:        snprintf(buffer_copy, sizeof(buffer_copy), "%s", buffer);
+       65:   92:        char *command_input = strtok(buffer_copy," ");
+        -:   93:
+       65:   94:        command_type command = get_command_type(command_input);
+        -:   95:
+       65:   96:        if (command == CONNECT) {
+        8:   97:            char ip_address[MAX_ADDRESS_LEN] = {0};
+        8:   98:            int port = 0;
+        -:   99:
+        8:  100:            if (sscanf(buffer, "CONNECT %99[^:]:%d%s", ip_address,
+        -:  101:                        &port, trailing) != 2) {
+        1:  102:                printf("Missing address and port argument\n");
+        1:  103:                continue;
+        -:  104:            }  
+        -:  105:
+        -:  106:            // Check if connection already exists
+        7:  107:            int connected = 0;
+        -:  108:            
+       7*:  109:            for (int i = 0; i < connections->size; i++) {
+    #####:  110:                if (strcmp(connections->array[i].ip_address, ip_address) == 0 
+    #####:  111:                    && connections->array[i].port == port) {
+    #####:  112:                        printf("Already connected to peer\n");
+    #####:  113:                        connected = 1;
+        -:  114:                    }
+        -:  115:            }
+        -:  116:
+       7*:  117:            if (connected == 1) {
+    #####:  118:                continue;
+        -:  119:            }
+        -:  120:
+        -:  121:            // Check if we have max connections
+       7*:  122:            if (connections_true_size(connections) == max_peers) {
+    #####:  123:                printf("Unable to connect to request peer\n");
+    #####:  124:                continue;
+        -:  125:            }
+        -:  126:
+        -:  127:            // Attempt connection
+        7:  128:            int sockfd = create_client_thread(port, ip_address, connections, 
+        -:  129:                                                packages, threads);
+        -:  130:
+        7:  131:            if (sockfd < 0) {
+        2:  132:                printf("Unable to connect to request peer\n");
+        2:  133:                continue;
+        -:  134:            }
+        -:  135:            
+        -:  136:            /* New thread has been created and will receive the ACP packet and 
+        -:  137:               print "Connection established with peer" */
+        -:  138:
+        -:  139:            /* Check if the connection was successful (if ACP was received)
+        -:  140:               Wait for 0.5 seconds */
+        5:  141:            usleep(500000);
+        -:  142:            // Check the connection
+        5:  143:            if (check_connected(connections, ip_address, port) != 1) {
+        -:  144:                // Remove the connection from connections and disconnect
+    #####:  145:                shutdown(sockfd, 0);
+    #####:  146:                close(sockfd);
+    #####:  147:                remove_connection_array(connections, ip_address, port);
+    #####:  148:                printf("Unable to connect to request peer\n");
+        -:  149:            }
+        -:  150:
+        -:  151:            // Otherwise, connection was successful
+        -:  152:
+        -:  153:        }
+       57:  154:        else if (command == DISCONNECT) {
+        3:  155:            char ip_address[MAX_ADDRESS_LEN] = {0};
+        3:  156:            int port = 0;
+        -:  157:
+        3:  158:            if (sscanf(buffer, "DISCONNECT %99[^:]:%d%s", ip_address,
+        -:  159:                        &port, trailing) != 2) {
+        1:  160:                printf("Missing address and port argument\n");
+        1:  161:                continue;
+        -:  162:            }  
+        -:  163:
+        -:  164:            // Check if connection exists or not
+        2:  165:            int connected = 0;
+        2:  166:            struct connection_info connection = {0};
+        -:  167:            
+        3:  168:            for (int i = 0; i < connections->size; i++) {
+        2:  169:                if (strcmp(connections->array[i].ip_address, ip_address) == 0 
+        2:  170:                    && connections->array[i].port == port) {
+        1:  171:                        connection = connections->array[i];
+        1:  172:                        connected = 1;
+        1:  173:                        break;
+        -:  174:                    }
+        -:  175:            }
+        -:  176:
+        2:  177:            if (connected == 0) {
+        1:  178:                printf("Unknown peer, not connected\n");
+        1:  179:                continue;
+        -:  180:            }
+        -:  181:
+        -:  182:            // Then disconnect
+        1:  183:            printf("Disconnected from peer\n");
+        -:  184:            // Send DSN packet to the peer
+        1:  185:            struct btide_packet DSN = generate_DSN();
+        1:  186:            send(connection.socket_fd, &DSN, sizeof(struct btide_packet), 0);
+        -:  187:            // Close the socket and remove from the connections list
+        1:  188:            shutdown(connection.socket_fd, 0);
+        1:  189:            close(connection.socket_fd);
+        1:  190:            remove_connection_array(connections, connection.ip_address,
+        -:  191:                                     connection.port);
+        -:  192:
+        -:  193:        }
+       54:  194:        else if (command == ADDPACKAGE) {
+       12:  195:            char file_name[MAX_COMMAND_LEN] = {0};
+        -:  196:
+       12:  197:            if (sscanf(buffer, "ADDPACKAGE %[^\n]", file_name) != 1) {
+        1:  198:                printf("Missing file argument\n");
+        1:  199:                continue;
+        -:  200:            }
+        -:  201:
+        -:  202:            // Attempt to access file
+       11:  203:            FILE* file = fopen(file_name, "r");
+       11:  204:            if (file == NULL) {
+        1:  205:                printf("Cannot open file\n");
+        1:  206:                continue;
+        -:  207:            }
+        -:  208:
+        -:  209:            // Attempt to parse bpkg file
+       10:  210:            struct bpkg_obj *package = bpkg_load(file_name);
+       10:  211:            if(!package) {
+        1:  212:                printf("Unable to parse bpkg file\n");
+        1:  213:                fclose(file);
+        1:  214:                continue;
+        -:  215:		    }
+        -:  216:
+        -:  217:            // Otherwise, add the package to the program's list of packages
+        9:  218:            append_dynamic_package_array(packages, package);
+        -:  219:
+        -:  220:            // Close the file
+        9:  221:            fclose(file);
+        -:  222:        }
+       42:  223:        else if (command == REMPACKAGE) {
+        4:  224:            char identifier[MAX_COMMAND_LEN] = {0};
+        -:  225:
+        4:  226:            if (sscanf(buffer, "REMPACKAGE %[^\n]", identifier) != 1) {
+        1:  227:                printf("Missing identifier argument, please specify whole 102");
+        1:  228:                printf("4 character or at least 20 characters\n");
+        1:  229:                continue;
+        -:  230:            }
+        -:  231:
+        -:  232:            // Check if the package exists in the array
+        3:  233:            int result = remove_package_array(packages, identifier);
+        -:  234:
+        3:  235:            if (result == 0) {
+        2:  236:                printf("Package has been removed\n");
+        -:  237:            }
+        -:  238:            else {
+        1:  239:                printf("Identifier provided does not match managed packages\n");
+        -:  240:            }
+        -:  241:
+        3:  242:            continue;
+        -:  243:            
+        -:  244:        }
+       38:  245:        else if (command == PACKAGES) {
+        -:  246:            
+       12:  247:            if (packages->size == 0) {
+        2:  248:                printf("No packages managed\n");
+        2:  249:                continue;
+        -:  250:            }
+        -:  251:            
+        -:  252:            /* Check completion status 
+        -:  253:               Compare the return value of min_completed hashes to the root in 
+        -:  254:               the bpkg file */
+       21:  255:            for (int i = 0; i < packages->size; i++) {
+        -:  256:                
+       11:  257:                struct bpkg_obj *current = packages->array[i];
+        -:  258:
+       11:  259:                struct bpkg_query result = {0};
+        -:  260:                // Get min complete hashes
+       11:  261:                result = bpkg_get_min_completed_hashes(current);
+        -:  262:                
+        -:  263:                // If the hashes is empty
+       11:  264:                if (result.len == 0) {
+        3:  265:                    printf("%d. %.32s, %s/%s : INCOMPLETE\n", i+1,
+        3:  266:                    current->ident, directory, current->filename);
+        3:  267:                    bpkg_query_destroy(&result);
+        3:  268:                    continue;
+        -:  269:                }
+        -:  270:
+        8:  271:                int completed = 1;
+        8:  272:                if (result.hashes != NULL) {
+        8:  273:                    char hash[64] = {0};
+        8:  274:                    memcpy(hash, result.hashes[0], 64);
+        -:  275:                    // Check if the root expected hash is returned
+        8:  276:                    completed = strncmp(current->hashes[0], hash, 64);
+        -:  277:                }   
+        -:  278:                // Print file information and completion status
+        8:  279:                if (completed == 0) {
+        4:  280:                    printf("%d. %.32s, %s/%s : COMPLETED\n", i+1, 
+        4:  281:                    current->ident, directory, current->filename);
+        -:  282:                }
+        -:  283:                else {
+        4:  284:                    printf("%d. %.32s, %s/%s : INCOMPLETE\n", i+1,
+        4:  285:                    current->ident, directory, current->filename);
+        -:  286:                }
+        -:  287:
+        8:  288:                bpkg_query_destroy(&result);
+        -:  289:                
+        -:  290:            }
+        -:  291:        
+        -:  292:        }
+       26:  293:        else if (command == PEERS) {
+        -:  294:            // Check if the connections array is empty
+        2:  295:            if (connections_true_size(connections) == 0) {
+        1:  296:                printf("Not connected to any peers\n");
+        1:  297:                continue;
+        -:  298:            }
+        -:  299:
+        -:  300:            // Otherwise, we have valid connections
+        -:  301:
+        1:  302:            printf("Connected to:\n\n");
+        -:  303:
+        -:  304:            // Create PNG packet
+        1:  305:            struct btide_packet PNG = generate_PNG();
+        -:  306:
+        1:  307:            int true_count = 0;
+        -:  308:
+        -:  309:            // Print connections and send PNG packets
+        2:  310:            for (int i = 0; i < connections->size; i++) {
+        1:  311:                if (connections->array[i].connected == 1) {
+        1:  312:                    printf("%d. %s:%d\n", true_count+1, connections->array[i].ip_address, 
+        1:  313:                        connections->array[i].port);
+        -:  314:                    // Send PNG
+        1:  315:                    send(connections->array[i].socket_fd, &PNG, 
+        -:  316:                        sizeof(struct btide_packet), 0);
+        1:  317:                    true_count++;
+        -:  318:                }
+        -:  319:            }
+        -:  320:        }
+       24:  321:        else if (command == FETCH) {
+        9:  322:            char ip_address[MAX_ADDRESS_LEN] = {0};
+        9:  323:            int port = 0;
+        9:  324:            char identifier[IDENT_LENGTH] = {0};
+        9:  325:            char hash[MAX_COMMAND_LEN] = {0};
+        9:  326:            uint32_t offset = -1;
+        -:  327:
+        -:  328:            // Check for valid input
+        9:  329:            int num_args = sscanf(buffer, "FETCH %99[^:]:%d %s %s %u", 
+        -:  330:                                ip_address, &port, identifier, hash, &offset);
+        -:  331:            
+        9:  332:            if (num_args != 4 && num_args != 5) {
+        1:  333:                printf("Missing arguments from command\n");
+        1:  334:                continue;
+        -:  335:            }  
+        -:  336:
+        -:  337:            // Check if connection exists
+        8:  338:            if (check_connected(connections, ip_address, port) != 1) {
+        1:  339:                printf("Unable to request chunk, peer not in list\n");
+        1:  340:                continue;
+        -:  341:            }
+        -:  342:            // Check if package exists
+        7:  343:            struct bpkg_obj *package = get_package(packages, identifier);
+        -:  344:
+        7:  345:            if (package == NULL) {
+        1:  346:                printf("Unable to request chunk, package is not managed\n");
+        1:  347:                continue;
+        -:  348:            }
+        -:  349:
+        -:  350:            // Check for valid hash
+        6:  351:            int valid = 0;
+        6:  352:            struct chunk desired_chunk = {0};
+        -:  353:
+        6:  354:            int num_hashes = package->nchunks;
+      131:  355:            for (int i = 0; i < num_hashes; i++) {
+      130:  356:                char* current_hash = package->chunks[i].hash;
+      130:  357:                if (strncmp(current_hash, hash, 64) == 0) {
+        5:  358:                    valid = 1;
+        5:  359:                    desired_chunk = package->chunks[i];
+        5:  360:                    break;
+        -:  361:                }
+        -:  362:            }
+        -:  363:
+        6:  364:            if (valid == 0) {
+        1:  365:                printf("Unable to request chunk, "
+        -:  366:                        "chunk hash does not belong to package\n");
+        1:  367:                continue;
+        -:  368:            }
+        -:  369:
+        -:  370:            // Otherwise send request 
+        -:  371:            // Get the connection
+        5:  372:            struct connection_info connection = {0};
+        -:  373:            
+       5*:  374:            for (int i = 0; i < connections->size; i++) {
+        5:  375:                if (strcmp(connections->array[i].ip_address, ip_address) == 0 
+        5:  376:                    && connections->array[i].port == port) {
+        5:  377:                        connection = connections->array[i];
+        5:  378:                        break;
+        -:  379:                    }
+        -:  380:            }
+        -:  381:
+        -:  382:            // Get data length
+        5:  383:            uint32_t data_len = desired_chunk.size;
+        -:  384:            // If offset was not provided, use offset of the chunk found
+        5:  385:            if (offset == -1) {
+        5:  386:                offset = desired_chunk.offset;
+        -:  387:            }
+        -:  388:            // Create and send the REQ packet
+        5:  389:            struct btide_packet REQ = generate_REQ(identifier, hash,
+        -:  390:                                                     data_len, offset);
+        5:  391:            send(connection.socket_fd, &REQ, sizeof(struct btide_packet), 0);
+        -:  392:            
+        -:  393:        }
+       15:  394:        else if (command == QUIT) {
+       11:  395:            break;
+        -:  396:        }
+        -:  397:        else {
+        4:  398:            printf("Invalid Input\n");
+        4:  399:            continue;
+        -:  400:        }
+        -:  401:
+        -:  402:    }
+        -:  403:
+       12:  404:    shutdown(server_sock_fd, 0);
+       12:  405:    close(server_sock_fd);
+       12:  406:    pthread_join(server_thread, NULL);
+        -:  407:
+        -:  408:    // Close all sockets (causing all threads to die)
+       20:  409:    for (int i = 0; i < connections->size; i++) {
+        8:  410:        int socket = connections->array[i].socket_fd;
+        8:  411:        shutdown(socket, 0);
+        8:  412:        close(socket);
+        -:  413:    }
+        -:  414:
+        -:  415:    // Wait for all threads to finish 
+       22:  416:    for (int i = 0; i < threads->size; i++) {
+       10:  417:        pthread_join(threads->array[i], NULL);
+        -:  418:    }
+        -:  419:
+        -:  420:    // Free the dynamic arrays
+       12:  421:    free_dynamic_connection_array(connections);
+       12:  422:    free_dynamic_package_array(packages);
+       12:  423:    free_thread_array(threads);
+        -:  424:
+        -:  425:}

@@ -1,0 +1,154 @@
+        -:    0:Source:src/packet.c
+        -:    1:#include <stdio.h>
+        -:    2:#include <string.h>
+        -:    3:#include <sys/socket.h>
+        -:    4:#include <net/packet.h>
+        -:    5:
+        -:    6:#define IDENT_LEN 1024
+        -:    7:#define HASH_LEN 64
+        -:    8:#define DATA_MAX 2998
+        -:    9:
+        5:   10:struct btide_packet generate_ACP(void) {
+        5:   11:    struct btide_packet packet = {
+        -:   12:            .msg_code = PKT_MSG_ACP,
+        -:   13:            .error = 0
+        -:   14:    };
+        5:   15:    return packet;
+        -:   16:}
+        -:   17:
+        5:   18:struct btide_packet generate_ACK(void) {
+        5:   19:    struct btide_packet packet = {
+        -:   20:            .msg_code = PKT_MSG_ACK,
+        -:   21:            .error = 0
+        -:   22:    };
+        5:   23:    return packet;
+        -:   24:}
+        -:   25:
+        1:   26:struct btide_packet generate_DSN(void) {
+        1:   27:    struct btide_packet packet = {
+        -:   28:            .msg_code = PKT_MSG_DSN,
+        -:   29:            .error = 0
+        -:   30:    };
+        1:   31:    return packet;
+        -:   32:}
+        -:   33:
+        1:   34:struct btide_packet generate_PNG(void) {
+        1:   35:    struct btide_packet packet = {
+        -:   36:            .msg_code = PKT_MSG_PNG,
+        -:   37:            .error = 0
+        -:   38:    };
+        1:   39:    return packet;
+        -:   40:}
+        -:   41:
+        1:   42:struct btide_packet generate_POG(void) {
+        1:   43:    struct btide_packet packet = {
+        -:   44:            .msg_code = PKT_MSG_POG,
+        -:   45:            .error = 0
+        -:   46:    };
+        1:   47:    return packet;
+        -:   48:}
+        -:   49:
+        5:   50:struct btide_packet generate_REQ(char* identifier, char* hash, 
+        -:   51:                                uint32_t data_len, uint32_t offset) {
+        5:   52:    struct btide_packet packet = {
+        -:   53:        .msg_code = PKT_MSG_REQ,
+        -:   54:        .error = 0
+        -:   55:    };
+        -:   56:    // Copy data into the packet's payload
+        5:   57:    memset(packet.pl.data, 0, PAYLOAD_MAX);
+        5:   58:    memcpy(packet.pl.data, &offset, sizeof(uint32_t));
+        5:   59:    memcpy(packet.pl.data + sizeof(uint32_t), &data_len, sizeof(uint32_t));
+        5:   60:    memcpy(packet.pl.data + 2 * sizeof(uint32_t), hash, HASH_LEN);
+        5:   61:    memcpy(packet.pl.data + sizeof(uint32_t) + sizeof(uint32_t) + HASH_LEN, 
+        -:   62:            identifier, strlen(identifier));
+        -:   63:    
+        5:   64:    return packet;
+        -:   65:}
+        -:   66:
+        -:   67:/* 
+        -:   68: * This function takes in the necessary information required for a RES packet 
+        -:   69: * and is also responsible for sending the RES packets after receiving a REQ 
+        -:   70: * packets, provided the socket file descriptor.
+        -:   71: * Returns 0 upon success, otherwise returns 1.
+        -:   72: */
+        5:   73:int generate_and_send_RES(int socket_fd, char* identifier, char* hash, 
+        -:   74:                    uint32_t data_len, uint32_t offset, 
+        -:   75:                    struct dynamic_package_array *packages) {
+        -:   76:    // Check if we have the corresponding package
+        5:   77:    struct bpkg_obj *package = get_package(packages, identifier);
+        -:   78:
+        5:   79:    if (package == NULL) {
+        -:   80:        // Send RES packet with error byte - we do not have the package
+        2:   81:        struct btide_packet error = {
+        -:   82:            .msg_code = PKT_MSG_RES,
+        -:   83:            .error = 1
+        -:   84:        };
+        2:   85:        send(socket_fd, &error, sizeof(struct btide_packet), 0);
+        2:   86:        return 1;
+        -:   87:    }
+        -:   88:
+        -:   89:    // Check if our hash is complete or not
+        -:   90:    // Traverse tree and check completion status
+        3:   91:    struct bpkg_query temp = bpkg_get_min_completed_hashes(package);
+        3:   92:    bpkg_query_destroy(&temp);
+        -:   93:    // Compare expected to computed of the particular chunk
+        3:   94:    struct merkle_tree_node *chunk = find_hash(package->tree->root, hash);
+        -:   95:    
+        -:   96:    // Compare expected and computed
+        3:   97:    if (strncmp(chunk->expected_hash, chunk->computed_hash, 64) != 0) {
+        -:   98:        // Chunk is incomplete; send error RES packet
+        1:   99:        struct btide_packet error = {
+        -:  100:            .msg_code = PKT_MSG_RES,
+        -:  101:            .error = 1
+        -:  102:        };
+        1:  103:        send(socket_fd, &error, sizeof(struct btide_packet), 0);
+        1:  104:        return 1;
+        -:  105:    }
+        -:  106:
+        -:  107:    // Otherwise, we have the package and the chunk is complete
+        -:  108:    // Send the data
+        2:  109:    int bytes_to_send = data_len;
+        2:  110:    int current_offset = offset;
+        -:  111:
+        -:  112:    // Open the file
+        2:  113:    FILE* data = fopen(package->filename, "rb");
+        -:  114:
+        4:  115:    while (bytes_to_send > 0) {
+        -:  116:
+        -:  117:        // Current data length is minimum of (bytes left to send) and max load
+        2:  118:        int current_data_len = (bytes_to_send > DATA_MAX) ?
+        2:  119:                                 DATA_MAX : bytes_to_send;
+        -:  120:
+        -:  121:        // Set RES packet to appropriate values
+        2:  122:        struct btide_packet RES = {
+        -:  123:        .msg_code = PKT_MSG_RES,
+        -:  124:        .error = 0
+        -:  125:        };
+        -:  126:
+        -:  127:        // Copy data into the packet's payload
+        2:  128:        memset(RES.pl.data, 0, PAYLOAD_MAX);
+        2:  129:        memcpy(RES.pl.data, &current_offset, sizeof(uint32_t));
+        -:  130:        // Read the required length of datafrom the actual file
+        2:  131:        char buffer[DATA_MAX] = {0};
+        2:  132:        fseek(data, current_offset, SEEK_SET);
+        2:  133:        fread(buffer, 1, current_data_len, data);
+        2:  134:        memcpy(RES.pl.data + sizeof(uint32_t), buffer, current_data_len);
+        2:  135:        memcpy(RES.pl.data + DATA_MAX + sizeof(uint32_t), &current_data_len, 
+        -:  136:                sizeof(uint16_t));
+        2:  137:        memcpy(RES.pl.data + DATA_MAX +  sizeof(uint32_t) + sizeof(uint16_t), 
+        -:  138:                hash, HASH_LEN);
+        2:  139:        memcpy(RES.pl.data + DATA_MAX + sizeof(uint32_t) + sizeof(uint16_t)
+        -:  140:            + HASH_LEN, identifier, IDENT_LEN);
+        -:  141:        
+        -:  142:        // Send the packet
+        2:  143:        send(socket_fd, &RES, sizeof(struct btide_packet), 0);
+        -:  144:
+        -:  145:        // After sending, adjust loop variables
+        2:  146:        bytes_to_send-=current_data_len;
+        2:  147:        current_offset+=current_data_len;
+        -:  148:    }
+        -:  149:
+        2:  150:fclose(data);
+        2:  151:return 0;
+        -:  152:
+        -:  153:}

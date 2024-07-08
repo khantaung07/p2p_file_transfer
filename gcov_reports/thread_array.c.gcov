@@ -1,0 +1,44 @@
+        -:    0:Source:src/thread_array.c
+        -:    1:#include <pthread.h>
+        -:    2:#include <signal.h>
+        -:    3:#include <stdlib.h>
+        -:    4:
+        -:    5:#include "thread_array.h"
+        -:    6:
+        -:    7:pthread_mutex_t thread_mutex = PTHREAD_MUTEX_INITIALIZER;
+        -:    8:
+        -:    9:#define INITIAL_CAPACITY 10
+        -:   10:
+       15:   11:struct thread_array *create_thread_array() {
+       15:   12:    struct thread_array *arr = malloc(sizeof(struct thread_array));
+        -:   13:
+        -:   14:    // Initialise the array
+       15:   15:    arr->array = malloc(INITIAL_CAPACITY * sizeof(pthread_t));
+       15:   16:    arr->size = 0;
+       15:   17:    arr->capacity = INITIAL_CAPACITY;
+        -:   18:
+       15:   19:    return arr;
+        -:   20:}
+        -:   21:
+    #####:   22:void resize_thread_array(struct thread_array *arr) {
+    #####:   23:    pthread_mutex_lock(&thread_mutex);
+    #####:   24:    arr->capacity *= 2;
+    #####:   25:    arr->array = realloc(arr->array, arr->capacity * sizeof(pthread_t));
+    #####:   26:    pthread_mutex_unlock(&thread_mutex);
+    #####:   27:}
+        -:   28:
+       10:   29:void append_thread_array(struct thread_array *arr, pthread_t thread) {
+       10:   30:    pthread_mutex_lock(&thread_mutex);
+       10:   31:    if (arr->size == arr->capacity) {
+    #####:   32:        resize_thread_array(arr);
+        -:   33:    }
+       10:   34:    arr->array[arr->size++] = thread;
+       10:   35:    pthread_mutex_unlock(&thread_mutex);
+       10:   36:}
+        -:   37:
+       14:   38:void free_thread_array(struct thread_array *arr) {
+       14:   39:    pthread_mutex_lock(&thread_mutex);
+       14:   40:    free(arr->array);
+       14:   41:    free(arr);
+       14:   42:    pthread_mutex_unlock(&thread_mutex);
+       14:   43:}

@@ -1,0 +1,5 @@
+Connection established with peer
+Missing arguments from command
+Unable to request chunk, peer not in list
+Unable to request chunk, package is not managed
+Unable to request chunk, chunk hash does not belong to package

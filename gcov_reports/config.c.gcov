@@ -1,0 +1,100 @@
+        -:    0:Source:src/config.c
+        -:    1:#include <stdio.h>
+        -:    2:#include <string.h>
+        -:    3:#include <stdlib.h>
+        -:    4:#include <stdint.h>
+        -:    5:#include <sys/stat.h>
+        -:    6:
+        -:    7:#define MAX_LINE_LENGTH 4096
+        -:    8:
+        -:    9:/*
+        -:   10: * Function that parses a configuration file provided in the command line 
+        -:   11: * arguments and stores the value in given pointer addresses
+        -:   12: * Returns 0 upon success, otherwise returning the corresponding error code
+        -:   13: */
+       15:   14:int parse_config(const char* config_path, char* directory, int* max_peers, 
+        -:   15:uint16_t* port) {
+        -:   16:
+       15:   17:    FILE* config = fopen(config_path, "r");
+        -:   18:
+       15:   19:    if (config == NULL) {
+        -:   20:        // If the configuration file does not exist
+    #####:   21:        return -1;
+        -:   22:    }
+        -:   23:
+        -:   24:    // Read from the file
+       15:   25:    char buffer[MAX_LINE_LENGTH];
+       15:   26:    int line_count = 0;
+        -:   27:
+       57:   28:    while (fgets(buffer, sizeof(buffer), config) != NULL) {
+       44:   29:        line_count++;
+        -:   30:
+       44:   31:        if (line_count > 3) {
+        -:   32:            // Extra lines in config file
+    #####:   33:            fclose(config);
+    #####:   34:            return -1;
+        -:   35:        }
+        -:   36:
+       44:   37:        char* label = strtok(buffer, ":");
+       44:   38:        char* value = strtok(NULL, ":");
+        -:   39:
+       44:   40:        if (label != NULL && value != NULL) {
+       44:   41:            if (strcmp(label, "directory") == 0) {
+        -:   42:                // Store the directory path
+        -:   43:                // Strip newline
+       15:   44:                value[strcspn(value, "\n")] = '\0';
+       15:   45:                strcpy(directory, value);
+        -:   46:                // Check if the directory exists
+       15:   47:                struct stat sb;
+       15:   48:                if (stat(value, &sb) == 0) {
+        -:   49:                    // Exists - check if it is a directory
+       15:   50:                    if (S_ISDIR(sb.st_mode)) {
+        -:   51:                        // It is a directory
+       15:   52:                        continue;
+        -:   53:                    }
+        -:   54:                    else {
+        -:   55:                        // It is a file
+    #####:   56:                        fclose(config);
+    #####:   57:                        return 3;
+        -:   58:                    }
+        -:   59:                }
+        -:   60:                // Otherwise create the directory
+        -:   61:                else {
+    #####:   62:                    if (mkdir(value, 0700) == -1) {
+        -:   63:                         // Error if it cannot be created
+    #####:   64:                         fclose(config);
+    #####:   65:                         return 3;
+        -:   66:                    }
+        -:   67:                }
+        -:   68:            }
+       29:   69:            else if (strcmp(label, "max_peers") == 0) {
+       15:   70:                *max_peers = atoi(value);
+        -:   71:                // Check for valid value
+       15:   72:                if (*max_peers < 1 || *max_peers > 2048) {
+        1:   73:                    fclose(config);
+        1:   74:                    return 4;
+        -:   75:                }
+        -:   76:            }
+       14:   77:            else if (strcmp(label, "port") == 0) {
+       14:   78:                int x = atoi(value);
+       14:   79:                if (x <= 1024 || x > 65535) {
+        1:   80:                    fclose(config);
+        1:   81:                    return 5;
+        -:   82:                }
+       13:   83:                *port = atoi(value); 
+        -:   84:            }
+        -:   85:        }
+        -:   86:        else {
+        -:   87:            // Error
+    #####:   88:            fclose(config);
+    #####:   89:            return -1;
+        -:   90:        }
+        -:   91:    }
+        -:   92:    // Success
+       13:   93:    fclose(config);
+       13:   94:    if (line_count == 3) {
+       13:   95:        return 0;
+        -:   96:    }
+    #####:   97:    return -1;
+        -:   98:    
+        -:   99:}

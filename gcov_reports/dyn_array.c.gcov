@@ -1,0 +1,269 @@
+        -:    0:Source:src/dyn_array.c
+        -:    1:#include <stdio.h>
+        -:    2:#include <stdlib.h>
+        -:    3:#include <pthread.h>
+        -:    4:#include "dyn_array.h"
+        -:    5:#include "peer.h"
+        -:    6:
+        -:    7:// Mutexes to prevent race condition across threads 
+        -:    8:pthread_mutex_t connections_mutex = PTHREAD_MUTEX_INITIALIZER;
+        -:    9:pthread_mutex_t packages_mutex = PTHREAD_MUTEX_INITIALIZER;
+        -:   10:
+        -:   11:#define INITIAL_CAPACITY 10
+        -:   12:
+       15:   13:struct dynamic_connection_array *create_dynamic_connection_array(
+        -:   14:    size_t max_peers) {
+        -:   15:    struct dynamic_connection_array *arr = 
+       15:   16:    malloc(sizeof(struct dynamic_connection_array));
+        -:   17:    
+       15:   18:    arr->array = malloc(INITIAL_CAPACITY * sizeof(struct connection_info));
+        -:   19:    
+       15:   20:    arr->size = 0;
+       15:   21:    arr->capacity = INITIAL_CAPACITY;
+       15:   22:    arr->max_peers = max_peers;
+       15:   23:    return arr;
+        -:   24:}
+        -:   25:
+    #####:   26:void resize_dynamic_connection_array(struct dynamic_connection_array *arr) {
+    #####:   27:    pthread_mutex_lock(&connections_mutex);
+    #####:   28:    arr->capacity *= 2;
+    #####:   29:    arr->array = realloc(arr->array, arr->capacity *
+        -:   30:                         sizeof(struct connection_info));
+    #####:   31:    pthread_mutex_unlock(&connections_mutex);
+    #####:   32:}
+        -:   33:
+       10:   34:void append_dynamic_connection_array(struct dynamic_connection_array *arr, 
+        -:   35:                            struct connection_info connection) {
+       10:   36:    pthread_mutex_lock(&connections_mutex);
+       10:   37:    if (arr->size == arr->capacity) {
+    #####:   38:        resize_dynamic_connection_array(arr);
+        -:   39:    }
+       10:   40:    arr->array[arr->size++] = connection;
+       10:   41:    pthread_mutex_unlock(&connections_mutex);
+       10:   42:}
+        -:   43:
+       14:   44:void free_dynamic_connection_array(struct dynamic_connection_array *arr) {
+       14:   45:    pthread_mutex_lock(&connections_mutex);
+       22:   46:    for (size_t i = 0; i < arr->size; i++) {
+        8:   47:        if (arr->array[i].ip_address != NULL) {
+        8:   48:            free(arr->array[i].ip_address);
+        -:   49:        }
+        -:   50:    }
+       14:   51:    free(arr->array);
+       14:   52:    free(arr);
+       14:   53:    pthread_mutex_unlock(&connections_mutex);
+       14:   54:}
+        -:   55:
+        -:   56:/*
+        -:   57: * Function that removes a connection from the array if it exists
+        -:   58: * Returns 0 upon success, returns 1 if it does not exist
+        -:   59: */
+        2:   60:int remove_connection_array(struct dynamic_connection_array *arr, 
+        -:   61:                            char *ip_address, int port) {
+        2:   62:    pthread_mutex_lock(&connections_mutex);
+        -:   63:    // Iterate through the array
+       2*:   64:    for (int i = 0; i < arr->size; i++) {
+        -:   65:        // Check if the IP address and port of the current connection match
+        2:   66:        if (strcmp(arr->array[i].ip_address, ip_address) == 0 
+        2:   67:                    && arr->array[i].port == port) {
+        -:   68:            // Free memory in ip address
+        2:   69:            free(arr->array[i].ip_address);
+        -:   70:            // Shift elements over
+       2*:   71:            for (int j = i; j < arr->size - 1; j++) {
+    #####:   72:                arr->array[j] = arr->array[j + 1];
+        -:   73:            }
+        -:   74:            // Decrement the size
+        2:   75:            arr->size--;
+        -:   76:            // Success
+        2:   77:            pthread_mutex_unlock(&connections_mutex);
+        2:   78:            return 0;
+        -:   79:        }
+        -:   80:    }
+        -:   81:    // Not found
+    #####:   82:    pthread_mutex_unlock(&connections_mutex);
+    #####:   83:    return 1; 
+        -:   84:    
+        -:   85:}
+        -:   86:
+        -:   87:/*
+        -:   88: * Function that sets a particular connection to 'connected'
+        -:   89: */
+        5:   90:void set_connected(struct dynamic_connection_array *arr,
+        -:   91:                       char *ip_address, int port) {
+        5:   92:    pthread_mutex_lock(&connections_mutex);
+        -:   93:    // Iterate through the array
+       5*:   94:    for (int i = 0; i < arr->size; i++) {
+        -:   95:        // Check if the IP address and port of the current connection match
+        5:   96:        if (strcmp(arr->array[i].ip_address, ip_address) == 0 
+        5:   97:                    && arr->array[i].port == port) {
+        -:   98:            // Set it to connected
+        5:   99:            arr->array[i].connected = 1;
+        -:  100:            // Success
+        5:  101:            pthread_mutex_unlock(&connections_mutex);
+        5:  102:            return;
+        -:  103:        }
+        -:  104:    }
+        -:  105:    // Not found
+    #####:  106:    pthread_mutex_unlock(&connections_mutex);
+    #####:  107:    return; 
+        -:  108:}
+        -:  109:
+        -:  110:
+        -:  111:/*
+        -:  112: * Function that sets a particular connection to 'disconnected'
+        -:  113: */
+       10:  114:void set_disconnected(struct dynamic_connection_array *arr,
+        -:  115:                       char *ip_address, int port) {
+       10:  116:    pthread_mutex_lock(&connections_mutex);
+        -:  117:    // Iterate through the array
+      10*:  118:    for (int i = 0; i < arr->size; i++) {
+        -:  119:        // Check if the IP address and port of the current connection match
+        9:  120:        if (strcmp(arr->array[i].ip_address, ip_address) == 0 
+        9:  121:                    && arr->array[i].port == port) {
+        -:  122:            // Set it to disconnected
+        9:  123:            arr->array[i].connected = 0;
+        -:  124:            // Success
+        9:  125:            pthread_mutex_unlock(&connections_mutex);
+        9:  126:            return;
+        -:  127:        }
+        -:  128:    }
+        -:  129:    // Not found
+        1:  130:    pthread_mutex_unlock(&connections_mutex);
+        1:  131:    return; 
+        -:  132:}
+        -:  133:
+        -:  134:
+        -:  135:/*
+        -:  136: * Function that returns the connection status of a particular connection
+        -:  137: * Connection is set after ACP/ACK process.
+        -:  138: */
+       13:  139:int check_connected(struct dynamic_connection_array *arr,
+        -:  140:                       char *ip_address, int port) {
+       13:  141:    pthread_mutex_lock(&connections_mutex);
+        -:  142:    // Iterate through the array
+       14:  143:    for (int i = 0; i < arr->size; i++) {
+        -:  144:        // Check if the IP address and port of the current connection match
+       13:  145:        if (strcmp(arr->array[i].ip_address, ip_address) == 0 
+       12:  146:                    && arr->array[i].port == port) {
+        -:  147:            // Return it
+       12:  148:            pthread_mutex_unlock(&connections_mutex);
+       12:  149:            return (arr->array[i].connected);
+        -:  150:        }
+        -:  151:    }
+        -:  152:    // Not found
+        1:  153:    pthread_mutex_unlock(&connections_mutex);
+        1:  154:    return -1; 
+        -:  155:}
+        -:  156:
+        -:  157:/* 
+        -:  158: * Returns the number of connected connections
+        -:  159: */
+       14:  160:int connections_true_size(struct dynamic_connection_array *arr) {
+       14:  161:    int result = 0;
+       14:  162:    pthread_mutex_lock(&connections_mutex);
+        -:  163:
+        -:  164:    // Iterate through the array
+       15:  165:    for (int i = 0; i < arr->size; i++) {
+        -:  166:        // Check if the connection is connected
+        1:  167:        if (arr->array[i].connected == 1) {
+        -:  168:            // Add to the count
+        1:  169:            result++;
+        -:  170:        }
+        -:  171:    }
+       14:  172:    pthread_mutex_unlock(&connections_mutex);
+       14:  173:    return result;
+        -:  174:}
+        -:  175:
+        -:  176:// Package array
+        -:  177:
+       15:  178:struct dynamic_package_array *create_dynamic_package_array() {
+        -:  179:    struct dynamic_package_array *arr = 
+       15:  180:    malloc(sizeof(struct dynamic_package_array));
+        -:  181:    
+       15:  182:    arr->array = malloc(INITIAL_CAPACITY * sizeof(struct bpkg_obj *));
+        -:  183:    
+       15:  184:    arr->size = 0;
+       15:  185:    arr->capacity = INITIAL_CAPACITY;
+       15:  186:    return arr;
+        -:  187:}
+        -:  188:
+    #####:  189:void resize_dynamic_package_array(struct dynamic_package_array *arr) {
+    #####:  190:    pthread_mutex_lock(&packages_mutex);
+    #####:  191:    arr->capacity *= 2;
+    #####:  192:    arr->array = realloc(arr->array, arr->capacity *
+        -:  193:                         sizeof(struct bpkg_obj *));
+    #####:  194:    pthread_mutex_unlock(&packages_mutex);
+    #####:  195:}
+        -:  196:
+        9:  197:void append_dynamic_package_array(struct dynamic_package_array *arr, 
+        -:  198:                            struct bpkg_obj *package) {
+        9:  199:    pthread_mutex_lock(&packages_mutex);
+        9:  200:    if (arr->size == arr->capacity) {
+    #####:  201:        resize_dynamic_package_array(arr);
+        -:  202:    }
+        9:  203:    arr->array[arr->size++] = package;
+        9:  204:    pthread_mutex_unlock(&packages_mutex);
+        9:  205:}
+        -:  206:
+       14:  207:void free_dynamic_package_array(struct dynamic_package_array *arr) {
+       14:  208:    pthread_mutex_lock(&packages_mutex);
+        -:  209:    // Free each bpkg object
+       21:  210:    for (int i = 0; i < arr->size; ++i) {
+        -:  211:        // Free each individual bpkg_obj pointer
+        7:  212:        bpkg_obj_destroy(arr->array[i]);
+        -:  213:    }
+       14:  214:    free(arr->array);
+       14:  215:    free(arr);
+       14:  216:    pthread_mutex_unlock(&packages_mutex);
+       14:  217:}
+        -:  218:
+        -:  219:/*
+        -:  220: * Function that removes a package from the array if it exists
+        -:  221: * Returns 0 upon success, returns 1 if it does not exist
+        -:  222: */
+        3:  223:int remove_package_array(struct dynamic_package_array *arr, 
+        -:  224:                        char *identifier) {
+        3:  225:    pthread_mutex_lock(&packages_mutex);
+        -:  226:    // Iterate through the array
+        5:  227:    for (int i = 0; i < arr->size; i++) {
+        -:  228:        // Check if the identifier of the current package matches
+        4:  229:        if (strncmp(arr->array[i]->ident, identifier, 20) == 0) {
+        -:  230:            // Shift elements over
+        -:  231:
+        2:  232:            bpkg_obj_destroy(arr->array[i]);
+        -:  233:
+        3:  234:            for (int j = i; j < arr->size - 1; j++) {
+        1:  235:                arr->array[j] = arr->array[j + 1];
+        -:  236:            }
+        -:  237:            // Decrement the size
+        2:  238:            arr->size--;
+        -:  239:            // Success
+        2:  240:            pthread_mutex_unlock(&packages_mutex);
+        2:  241:            return 0;
+        -:  242:        }
+        -:  243:    }
+        1:  244:    pthread_mutex_unlock(&packages_mutex);
+        1:  245:    return 1;
+        -:  246:}
+        -:  247:
+        -:  248:/* 
+        -:  249: * Function that returns a package from an array given its identifier. 
+        -:  250: * Returns the package, or NULL if the package does not exist in the array.
+        -:  251: */
+       14:  252:struct bpkg_obj *get_package(struct dynamic_package_array *arr, char* ident) {
+       14:  253:    pthread_mutex_lock(&packages_mutex);
+        -:  254:
+       15:  255:    for (int i = 0; i < arr->size; i++) {
+        -:  256:        // Check if the identifier of the current package matches
+       12:  257:        if (strncmp(arr->array[i]->ident, ident, 20) == 0) {
+        -:  258:            // Return the package
+       11:  259:            struct bpkg_obj *package = arr->array[i];
+        -:  260:            // Success
+       11:  261:            pthread_mutex_unlock(&packages_mutex);
+       11:  262:            return package;
+        -:  263:        }
+        -:  264:    }
+        -:  265:    // Not found
+        3:  266:    pthread_mutex_unlock(&packages_mutex);
+        3:  267:    return NULL;
+        -:  268:}

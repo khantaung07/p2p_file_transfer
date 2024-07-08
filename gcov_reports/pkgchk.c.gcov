@@ -1,0 +1,767 @@
+        -:    0:Source:src/chk/pkgchk.c
+        -:    0:Graph:pkgmain-pkgchk.gcno
+        -:    0:Data:pkgmain-pkgchk.gcda
+        -:    0:Runs:14
+        -:    1:#define _XOPEN_SOURCE 700 
+        -:    2:
+        -:    3:#include <stdlib.h>
+        -:    4:#include <stdio.h>
+        -:    5:#include <stddef.h>
+        -:    6:#include <unistd.h>
+        -:    7:#include <string.h>
+        -:    8:#include <sys/types.h>
+        -:    9:#include <chk/pkgchk.h>
+        -:   10:#include <crypt/sha256.h>
+        -:   11:
+        -:   12:#define MAX_VARIABLE_NAME_LENGTH 10
+        -:   13:
+        -:   14:// PART 1
+        -:   15:
+        -:   16:/*
+        -:   17: * Function that parses the data values in the bpkg file
+        -:   18: */
+       63:   19:int parse_data(const char* line, char* label, char* data) {
+       63:   20:    return sscanf(line, "%[^:]:%[^\n]", label, data);
+        -:   21:}
+        -:   22:
+        -:   23:/**
+        -:   24: * Loads the package for when a valid path is given
+        -:   25: */
+       14:   26:struct bpkg_obj* bpkg_load(const char* path) {
+        -:   27:    // Check for valid path
+       14:   28:    FILE *bpkg_file = fopen(path, "r");
+        -:   29:
+       14:   30:    if (bpkg_file == NULL) {
+        -:   31:        // .bpkg file does not exist; return NULL
+    #####:   32:        return NULL; 
+        -:   33:    }
+        -:   34:
+        -:   35:    // Create new bpkg_obj and tree
+       14:   36:    struct bpkg_obj *obj = calloc(1, sizeof(struct bpkg_obj));
+        -:   37:
+        -:   38:    // Read the file to fill the fields and build the merkle tree
+       14:   39:    char label[MAX_VARIABLE_NAME_LENGTH] = {0};
+       14:   40:    char data[IDENT_LENGTH] = {0};
+       14:   41:    char line[MAX_VARIABLE_NAME_LENGTH+IDENT_LENGTH] = {0};
+        -:   42:    
+       76:   43:    while (fgets(line, sizeof(line), bpkg_file) != NULL) {
+        -:   44:        // Clear previous data
+       63:   45:        memset(label, 0, sizeof(label));
+       63:   46:        memset(data, 0, sizeof(data));
+        -:   47:
+        -:   48:        // Strip newline character
+       63:   49:        line[strcspn(line, "\n")] = '\0';
+        -:   50:
+       63:   51:        if(parse_data(line, label, data) == 2) {
+        -:   52:            // Store data in the bpkg obj
+       62:   53:            if (strcmp(label, "ident") == 0) {
+       13:   54:                strcpy(obj->ident, data);
+        -:   55:            }
+       49:   56:            else if (strcmp(label, "filename") == 0) {
+       13:   57:                strcpy(obj->filename, data);
+        -:   58:            }
+       36:   59:            else if (strcmp(label, "size") == 0) {
+       12:   60:                obj->size = strtol(data, NULL, 10);
+        -:   61:            }
+       24:   62:            else if (strcmp(label, "nhashes") == 0) {
+       12:   63:                obj->nhashes = strtol(data, NULL, 10);
+        -:   64:
+       12:   65:                int nhashes = obj->nhashes;
+        -:   66:
+        -:   67:                // Allocate memory to store hashes in the obj
+        -:   68:                // Allocate memory for pointers
+       12:   69:                obj->hashes = malloc(sizeof(char*)*nhashes);
+        -:   70:
+        -:   71:                // Allocate memory for each hash
+    33099:   72:                for (int i = 0; i < nhashes; i++) {
+        -:   73:                    // Extra character for null terminator
+    33087:   74:                    obj->hashes[i] = calloc((SHA256_HEXLEN)+1, sizeof(char));
+        -:   75:                }
+        -:   76:
+        -:   77:                // Check for "hashes:"
+       12:   78:                fgets(line, sizeof(line), bpkg_file);
+        -:   79:
+       12:   80:                if (strcmp(line, "hashes:\n") != 0) {
+        -:   81:                    // Invalid label
+    #####:   82:                    bpkg_obj_destroy(obj);
+    #####:   83:                    fclose(bpkg_file);
+    #####:   84:                    return NULL;
+        -:   85:                }
+        -:   86:
+        -:   87:                // Parse hashes
+       12:   88:                int count = 0;
+        -:   89:
+    33099:   90:                while (count < nhashes) {
+    33087:   91:                    if (fgets(line, sizeof(line), bpkg_file) != NULL) {
+        -:   92:                        // Strip new line character and tab space
+    33087:   93:                        char *hash_ptr = line;
+    33087:   94:                        hash_ptr++;
+    33087:   95:                        hash_ptr[strcspn(hash_ptr, "\n")] = '\0';
+        -:   96:                        // Copy the hash to the object
+    33087:   97:                        strncpy(obj->hashes[count], hash_ptr, 64); 
+    33087:   98:                        count++;
+        -:   99:                    }
+        -:  100:                    else {
+        -:  101:                        // Error encountered: line was null before hash count
+    #####:  102:                        bpkg_obj_destroy(obj);
+    #####:  103:                        fclose(bpkg_file);
+    #####:  104:                        return NULL;
+        -:  105:                    } 
+        -:  106:                }
+        -:  107:            }
+       12:  108:            else if (strcmp(label, "nchunks") == 0) {
+       12:  109:                obj->nchunks = strtol(data, NULL, 10);
+        -:  110:
+       12:  111:                int nchunks = obj->nchunks;
+        -:  112:                
+        -:  113:                // Allocate memory for the chunks
+       12:  114:                obj->chunks = malloc(sizeof(struct chunk)*nchunks);
+        -:  115:
+        -:  116:                // Check for "hashes:"
+       12:  117:                fgets(line, sizeof(line), bpkg_file);
+        -:  118:
+       12:  119:                if (strcmp(line, "chunks:\n") != 0) {
+        -:  120:                    // Invalid label
+    #####:  121:                    bpkg_obj_destroy(obj);
+    #####:  122:                    fclose(bpkg_file);
+    #####:  123:                    return NULL;
+        -:  124:                }
+        -:  125:
+        -:  126:                // Parse chunks
+       12:  127:                int count = 0;
+        -:  128:
+    33111:  129:                while (count < nchunks) {
+    33099:  130:                    if (fgets(line, sizeof(line), bpkg_file) != NULL) {
+        -:  131:                        // Strip tab space 
+        -:  132:                        // sscanf does not accept newline into %u (no stripping)
+    33099:  133:                        char *chunk_ptr = line;
+    33099:  134:                        chunk_ptr++;
+        -:  135:                        // Fill the chunk object with the data
+    33099:  136:                        sscanf(chunk_ptr, "%64[^,],%u,%u", 
+    33099:  137:                        obj->chunks[count].hash, 
+    33099:  138:                        &obj->chunks[count].offset, 
+    33099:  139:                        &obj->chunks[count].size);
+    33099:  140:                        obj->chunks[count].chunk_node = NULL;
+    33099:  141:                        count++;
+        -:  142:                    }
+        -:  143:                    else {
+        -:  144:                        // Error encountered: line was null before chunk count
+    #####:  145:                        bpkg_obj_destroy(obj);
+    #####:  146:                        fclose(bpkg_file);
+    #####:  147:                        return NULL;
+        -:  148:                    } 
+        -:  149:                }
+        -:  150:            }
+        -:  151:        }
+        -:  152:        else {
+        -:  153:            // Did not match any of the labels: invalid .bpkg file
+        1:  154:            bpkg_obj_destroy(obj);
+        1:  155:            fclose(bpkg_file);
+        1:  156:            return NULL;
+        -:  157:        }
+        -:  158:    }
+        -:  159:    // Check if the object was created successfully 
+       13:  160:    if (obj == NULL ||
+       13:  161:        obj->ident[0] == '\0' ||
+       12:  162:        obj->filename[0] == '\0' ||
+       12:  163:        obj->hashes == NULL ||
+       12:  164:        obj->chunks == NULL) {
+        1:  165:        bpkg_obj_destroy(obj);
+        1:  166:        fclose(bpkg_file);
+        1:  167:        return NULL;
+        -:  168:    } 
+        -:  169:
+        -:  170:    // Close the file
+       12:  171:    fclose(bpkg_file);
+        -:  172:
+        -:  173:    // Construct merkle tree
+       12:  174:    obj->tree = build_merkle_tree(obj);
+        -:  175:
+       12:  176:    return obj;
+        -:  177:}
+        -:  178:
+        -:  179:/*
+        -:  180: * Creates a node for a merkle tree with an expected hash value
+        -:  181: */
+    66186:  182:struct merkle_tree_node* create_new_node(const char* hash, int is_leaf) {
+    66186:  183:    struct merkle_tree_node *node = malloc(sizeof(struct merkle_tree_node));
+        -:  184:    // Copy expected hash value
+    66186:  185:    strncpy(node->expected_hash, hash, 64);
+    66186:  186:    node->key = NULL;
+    66186:  187:    node->value = NULL;
+    66186:  188:    node->left = NULL;
+    66186:  189:    node->right = NULL;
+    66186:  190:    node->is_leaf = is_leaf;
+    66186:  191:    return node;
+        -:  192:}
+        -:  193:
+        -:  194:/*
+        -:  195: * Build a merkle tree with the values of a given bpkg obj and returns it
+        -:  196: */
+       12:  197:struct merkle_tree* build_merkle_tree(struct bpkg_obj *obj) {
+        -:  198:    // Allocate memory for new tree
+       12:  199:    struct merkle_tree *tree = malloc(sizeof(struct merkle_tree));
+       12:  200:    tree->n_nodes = obj->nchunks + obj->nhashes;
+        -:  201:    
+        -:  202:    // Build tree in order
+       12:  203:    struct merkle_tree_node *root = {0};
+        -:  204:
+        -:  205:    // Assign root
+       12:  206:    if (obj->nhashes > 0) {
+       11:  207:        root = create_new_node(obj->hashes[0], 0);
+       11:  208:        tree->root = root;
+        -:  209:    }
+        -:  210:    /* Special case where there are no hashes
+        -:  211:       Therefore only one chunk (and it should be the root) */
+        -:  212:    else {
+        1:  213:        root = create_new_node(obj->chunks[0].hash, 1);
+        1:  214:        tree->root = root;
+        -:  215:        // Return early since the tree/chunk is complete
+        1:  216:        return tree;
+        -:  217:    }
+        -:  218:    
+        -:  219:
+        -:  220:    // Level-order traversal of the hashes
+        -:  221:
+        -:  222:    // Temporary array of nodes to store the levels of the tree
+        -:  223:    struct merkle_tree_node **layers = \
+       11:  224:    malloc(sizeof(struct merkle_tree_node*) * obj->nhashes);
+        -:  225:
+       11:  226:    layers[0] = root;
+       11:  227:    int current_node = 1; 
+        -:  228:
+        -:  229:
+        -:  230:    // Build tree with hashes
+    33087:  231:    for (int i = 1; i < obj->nhashes; i++) {
+        -:  232:        // Calculate parent of the current node
+        -:  233:        // Formula: floor((current node - 1)/2)
+    33076:  234:        struct merkle_tree_node *parent = layers[(i - 1) / 2];
+        -:  235:        // Create new node
+    33076:  236:        struct merkle_tree_node *node = create_new_node(obj->hashes[i],
+        -:  237:         0);
+        -:  238:
+        -:  239:        // Connect the current node to its parent
+        -:  240:        // If odd, it is a left child, otherwise it is a right child
+    33076:  241:        if (i % 2 != 0) {
+    16538:  242:            parent->left = node;
+        -:  243:        } else {
+    16538:  244:            parent->right = node;
+        -:  245:        }
+    33076:  246:        layers[current_node] = node;
+    33076:  247:        current_node++;
+        -:  248:    }
+        -:  249:
+        -:  250:    // Finish building the tree with chunks
+       11:  251:    int current_chunk = current_node;
+        -:  252:
+    33109:  253:    for (int i = 0; i < obj->nchunks; i++) {
+    33098:  254:        struct merkle_tree_node *parent = layers[(current_chunk - 1) / 2];
+        -:  255:        // Create new leaf node
+    33098:  256:        struct merkle_tree_node *node = create_new_node(obj->chunks[i].hash, 1);
+        -:  257:
+        -:  258:        // Assign the node to the chunk
+    33098:  259:        obj->chunks[i].chunk_node = node;
+        -:  260:        
+        -:  261:        // Connect the current node to its parent
+    33098:  262:        if (current_chunk % 2 != 0) {
+    16549:  263:            parent->left = node;
+        -:  264:        } else {
+    16549:  265:            parent->right = node;
+        -:  266:        }
+    33098:  267:        current_chunk++;
+        -:  268:    }
+        -:  269:
+        -:  270:    // Free temporary array
+       11:  271:    free(layers);
+        -:  272:
+       11:  273:    return tree;
+        -:  274:}
+        -:  275:
+        -:  276:/**
+        -:  277: * Checks to see if the referenced filename in the bpkg file
+        -:  278: * exists or not.
+        -:  279: * @param bpkg, constructed bpkg object
+        -:  280: * @return query_result, a single string should be
+        -:  281: *      printable in hashes with len sized to 1.
+        -:  282: * 		If the file exists, hashes[0] should contain "File Exists"
+        -:  283: *		If the file does not exist, hashes[0] should contain "File Created"
+        -:  284: */
+        2:  285:struct bpkg_query bpkg_file_check(struct bpkg_obj* bpkg) {
+        2:  286:    struct bpkg_query qry = { 0 };
+        2:  287:    qry.hashes = malloc(sizeof(char*));
+        2:  288:    qry.len = 1;
+        -:  289:
+        -:  290:    // Check if the file exists
+        2:  291:    FILE *file = fopen(bpkg->filename, "r");
+        -:  292:
+        2:  293:    if (file == NULL) {
+        -:  294:        // Create new file and edit hashes
+        1:  295:        qry.hashes[0] = malloc(13);
+        1:  296:        strcpy(qry.hashes[0], "File Created");
+        -:  297:
+        1:  298:        file = fopen(bpkg->filename, "w");
+        -:  299:        // Get the file descriptor
+        1:  300:        int fd = fileno(file);
+        -:  301:        // Set the size
+        1:  302:        ftruncate(fd, bpkg->size);
+        1:  303:        fclose(file);
+        -:  304:    }
+        -:  305:    else {
+        1:  306:        qry.hashes[0] = malloc(12);
+        1:  307:        strcpy(qry.hashes[0], "File Exists");
+        1:  308:        fclose(file);
+        -:  309:    }
+        -:  310:    
+        2:  311:    return qry;
+        -:  312:}
+        -:  313:
+        -:  314:/**
+        -:  315: * Retrieves a list of all hashes within the package/tree
+        -:  316: * @param bpkg, constructed bpkg object
+        -:  317: * @return query_result, This structure will contain a list of hashes
+        -:  318: * 		and the number of hashes that have been retrieved
+        -:  319: */
+        2:  320:struct bpkg_query bpkg_get_all_hashes(struct bpkg_obj* bpkg) {
+        2:  321:    struct bpkg_query qry = { 0 };
+        -:  322:
+        -:  323:    // Calculate number of total hashes
+        2:  324:    int total_hashes = bpkg->nhashes + bpkg->nchunks;
+        2:  325:    qry.hashes = malloc(sizeof(char*) * total_hashes);
+        2:  326:    qry.len = total_hashes;
+        -:  327:
+        -:  328:    // Internal nodes (hashes)
+       17:  329:    for (int i = 0; i < bpkg->nhashes; i++) {
+       15:  330:        qry.hashes[i] = malloc(SHA256_HEXLEN + 1);
+       15:  331:        strncpy(qry.hashes[i], bpkg->hashes[i], SHA256_HEXLEN + 1);
+        -:  332:    }
+        -:  333:
+        -:  334:    // Leaf nodes (chunks)
+       19:  335:    for (int i = 0; i < bpkg->nchunks; i++) {
+       17:  336:        qry.hashes[bpkg->nhashes + i] = malloc(SHA256_HEXLEN + 1);
+       17:  337:        strncpy(qry.hashes[bpkg->nhashes + i], 
+       17:  338:        bpkg->chunks[i].hash, SHA256_HEXLEN + 1);
+        -:  339:    }
+        -:  340:    
+        2:  341:    return qry;
+        -:  342:}
+        -:  343:
+        -:  344:/**
+        -:  345: * Retrieves all completed chunks of a package object
+        -:  346: * @param bpkg, constructed bpkg object
+        -:  347: * @return query_result, This structure will contain a list of hashes
+        -:  348: * 		and the number of hashes that have been retrieved
+        -:  349: */
+        4:  350:struct bpkg_query bpkg_get_completed_chunks(struct bpkg_obj* bpkg) { 
+        4:  351:    struct bpkg_query qry = { 0 };
+        -:  352:
+        -:  353:    // Check if the file exists
+        4:  354:    FILE *file = fopen(bpkg->filename, "rb");
+        -:  355:
+        4:  356:    if (file == NULL) {
+        1:  357:        return qry;
+        -:  358:    }
+        -:  359:
+        -:  360:    // Allocate memory for pointers to hashes
+        -:  361:    // Note: there may be extra null pointers if incomplete hashes exist
+        -:  362:    // These are cleaned up in the destroy function
+        3:  363:    qry.hashes = malloc(sizeof(char*)*bpkg->nchunks);
+        -:  364:
+        -:  365:    // For each chunk, compare the expected hash with the actual hashed data
+        -:  366:    // If it is correct, add it to the query object
+        3:  367:    int count = 0;
+        -:  368:
+      163:  369:    for (int i = 0; i < bpkg->nchunks; i++) {
+        -:  370:        // Go to offset
+      160:  371:        if (fseek(file, bpkg->chunks[i].offset, SEEK_SET) != 0) {
+        -:  372:            // Some error encountered e.g. EOF
+        -:  373:            // No other chunks will be correct
+    #####:  374:            fclose(file);
+    #####:  375:            return qry;
+        -:  376:        }
+        -:  377:
+      160:  378:        int chunk_size = bpkg->chunks[i].size;
+        -:  379:
+        -:  380:        // Allocate memory for a buffer to store the data
+      160:  381:        char* buffer = malloc(chunk_size);
+        -:  382:        
+        -:  383:        // Read from the file (byte by byte)
+      160:  384:        if (fread(buffer, 1, chunk_size, file)
+      160:  385:         != chunk_size) {
+        -:  386:            // Did not read full chunk amount
+    #####:  387:            fclose(file);
+    #####:  388:            return qry;
+        -:  389:        }
+        -:  390:
+        -:  391:        // Compute the SHA256 value of this data
+      160:  392:        struct sha256_compute_data cdata = { 0 };
+      160:  393:        char final_hash[65] = { 0 };
+      160:  394:        sha256_compute_data_init(&cdata);
+      160:  395:        sha256_update(&cdata, buffer, chunk_size);
+      160:  396:        sha256_finalize(&cdata, NULL);
+      160:  397:        sha256_output_hex(&cdata, final_hash);
+        -:  398:
+        -:  399:        /* Compare the expected and computed hash values
+        -:  400:           If computed hash matches expected, add it to the query */
+      160:  401:        if (strncmp(final_hash, bpkg->chunks[i].hash, 64) == 0) {
+      160:  402:            qry.hashes[count] = malloc(SHA256_HEXLEN);
+      160:  403:            strncpy(qry.hashes[count], final_hash, 64);
+      160:  404:            count++;
+        -:  405:        }
+        -:  406:
+        -:  407:        // Free the temporary buffer
+      160:  408:        free(buffer);
+        -:  409:    }  
+        -:  410:
+        3:  411:    qry.len = count;
+        3:  412:    fclose(file);
+        -:  413:
+        3:  414:    return qry;
+        -:  415:}
+        -:  416:
+        -:  417:/*
+        -:  418: * Function that computes the hashes of all non-leaf nodes in a tree
+        -:  419: */
+    65789:  420:void bpkg_compute_hashes(struct merkle_tree_node *current) {
+        -:  421:    // Some error encountered
+    65789:  422:    if (current == NULL) {
+    #####:  423:        return;
+        -:  424:    }
+        -:  425:
+        -:  426:    /* Don't need to calculate for leaf nodes
+        -:  427:      Hash is calculated from the data file */
+    65789:  428:    if (current->is_leaf == 1) {
+    32896:  429:        return;
+        -:  430:    }
+        -:  431:
+    32893:  432:    bpkg_compute_hashes(current->left);
+    32893:  433:    bpkg_compute_hashes(current->right);
+        -:  434:
+        -:  435:    // Concatenate the child hashes
+    32893:  436:    char combined_hash[2 * SHA256_HEXLEN + 1] = {0};
+        -:  437:
+    32893:  438:    strncpy(combined_hash, current->left->computed_hash, 64);
+    32893:  439:    strncat(combined_hash, current->right->computed_hash, 64);
+        -:  440:
+        -:  441:    // Compute the SHA256 value of this concatenated string
+    32893:  442:    struct sha256_compute_data cdata = { 0 };
+    32893:  443:    char final_hash[65] = { 0 };
+    32893:  444:    sha256_compute_data_init(&cdata);
+    32893:  445:    sha256_update(&cdata, combined_hash, 2 * SHA256_HEXLEN);
+    32893:  446:    sha256_finalize(&cdata, NULL);
+    32893:  447:    sha256_output_hex(&cdata, final_hash);
+        -:  448:
+        -:  449:    // Store the final hash
+    32893:  450:    strncpy(current->computed_hash, final_hash, 64);
+        -:  451:
+    32893:  452:    return;
+        -:  453:
+        -:  454:}
+        -:  455:
+       17:  456:struct bpkg_query bpkg_get_min_completed_hashes_helper(
+        -:  457:    struct merkle_tree_node* current) {
+       17:  458:    struct bpkg_query qry = {0};
+        -:  459:
+        -:  460:    /* This is the case where a chunk is incomplete and recursion has brought 
+        -:  461:     * the function to the child of the chunk (NULL)
+        -:  462:     */
+       17:  463:    if (current == NULL) {
+        2:  464:        return qry;
+        -:  465:    }
+        -:  466:    
+        -:  467:    // The current node is complete
+        -:  468:    // Therefore return it
+       15:  469:    if (strncmp(current->expected_hash, current->computed_hash, 64) == 0) {
+        8:  470:        qry.hashes = malloc(sizeof(char*));
+        8:  471:        qry.hashes[0] = malloc(SHA256_HEXLEN);
+        8:  472:        strncpy(qry.hashes[0], current->expected_hash, 64);
+        8:  473:        qry.len = 1;
+        8:  474:        return qry;
+        -:  475:    }
+        -:  476:    // The current node is incomplete
+        -:  477:    // Return left and right subtrees seperately 
+        7:  478:    struct bpkg_query left_qry = bpkg_get_min_completed_hashes_helper(
+        -:  479:        current->left);
+        7:  480:    struct bpkg_query right_qry = bpkg_get_min_completed_hashes_helper(
+        -:  481:        current->right);
+        -:  482:    
+        -:  483:    // Merge query object of left and right subtrees
+        7:  484:    qry.len = left_qry.len + right_qry.len;
+        7:  485:    qry.hashes = malloc(sizeof(char*) * qry.len);
+        -:  486:
+        7:  487:    int current_index = 0;
+        -:  488:
+       13:  489:    for (int i = 0; i < left_qry.len; i++) {
+        6:  490:        qry.hashes[current_index] = left_qry.hashes[i];
+        6:  491:        current_index++;
+        -:  492:    }
+       22:  493:    for (int i = 0; i < right_qry.len; i++) {
+       15:  494:        qry.hashes[current_index] = right_qry.hashes[i];
+       15:  495:        current_index++;
+        -:  496:    }
+        -:  497:
+        -:  498:    // Free the char* pointer
+        7:  499:    free(left_qry.hashes);
+        7:  500:    free(right_qry.hashes);
+        -:  501:
+        7:  502:    return qry;
+        -:  503:
+        -:  504:}
+        -:  505:
+        -:  506:
+        -:  507:/**
+        -:  508: * Gets only the required/min hashes to represent the current completion state
+        -:  509: * Return the smallest set of hashes of completed branches to represent
+        -:  510: * the completion state of the file.
+        -:  511: *
+        -:  512: * @param bpkg, constructed bpkg object
+        -:  513: * @return query_result, This structure will contain a list of hashes
+        -:  514: * 		and the number of hashes that have been retrieved
+        -:  515: */
+        3:  516:struct bpkg_query bpkg_get_min_completed_hashes(struct bpkg_obj* bpkg) {
+        3:  517:    struct bpkg_query qry = { 0 };
+        -:  518:    
+        -:  519:    // Check if the file exists
+        3:  520:    FILE *file = fopen(bpkg->filename, "rb");
+        -:  521:
+        3:  522:    if (file == NULL) {
+    #####:  523:        return qry;
+        -:  524:    }
+        -:  525:
+        -:  526:    // For each chunk, calculate the computed hash value
+    32899:  527:    for (int i = 0; i < bpkg->nchunks; i++) {
+        -:  528:        // Go to offset
+    32896:  529:        if (fseek(file, bpkg->chunks[i].offset, SEEK_SET) != 0) {
+        -:  530:            // Some error encountered e.g. EOF
+        -:  531:            // No other chunks will be correct
+    #####:  532:            fclose(file);
+    #####:  533:            return qry;
+        -:  534:        }
+        -:  535:
+    32896:  536:        int chunk_size = bpkg->chunks[i].size;
+        -:  537:
+        -:  538:        // Allocate memory for a buffer to store the data
+    32896:  539:        char* buffer = malloc(chunk_size);
+        -:  540:        
+        -:  541:        // Read from the file (byte by byte)
+    32896:  542:        if (fread(buffer, 1, chunk_size, file)
+    32896:  543:         != chunk_size) {
+        -:  544:            // Did not read full chunk amount
+    #####:  545:            fclose(file);
+    #####:  546:            free(buffer);
+    #####:  547:            return qry;
+        -:  548:        }
+        -:  549:
+        -:  550:        // Compute the SHA256 value of this data
+    32896:  551:        struct sha256_compute_data cdata = { 0 };
+    32896:  552:        char final_hash[65] = { 0 };
+    32896:  553:        sha256_compute_data_init(&cdata);
+    32896:  554:        sha256_update(&cdata, buffer, chunk_size);
+    32896:  555:        sha256_finalize(&cdata, NULL);
+    32896:  556:        sha256_output_hex(&cdata, final_hash);
+        -:  557:
+        -:  558:        // Store the computed hash in the node
+    32896:  559:        strncpy(bpkg->chunks[i].chunk_node->computed_hash, final_hash, 64);
+        -:  560:
+        -:  561:        // Free the temporary buffer
+    32896:  562:        free(buffer);
+        -:  563:    }  
+        -:  564:
+        3:  565:    fclose(file);
+        -:  566:
+        -:  567:    // Traverse the tree and calculate the hash value for the non-leaf nodes
+        3:  568:    bpkg_compute_hashes(bpkg->tree->root);
+        -:  569:
+        -:  570:    // Get the min completed hashes
+        3:  571:    qry = bpkg_get_min_completed_hashes_helper(bpkg->tree->root);
+        -:  572:
+        3:  573:    return qry;
+        -:  574:}
+        -:  575:
+        -:  576:
+        -:  577:/* 
+        -:  578: * Function that recursively searches tree for a specified hash
+        -:  579: */
+        1:  580:struct merkle_tree_node* find_hash(struct merkle_tree_node *current, char *hash)
+        -:  581:{   
+        -:  582:    // Base case: hash not present
+        1:  583:    if (current == NULL) {
+    #####:  584:        return NULL; 
+        -:  585:    }
+        -:  586:
+        1:  587:    if (strncmp(current->expected_hash, hash, 64) == 0) {
+        1:  588:        return current;
+        -:  589:    }
+        -:  590:
+        -:  591:    // Search left subtree recursively
+    #####:  592:    struct merkle_tree_node *target = find_hash(current->left, hash);
+    #####:  593:    if (target != NULL) {
+    #####:  594:        return target;
+        -:  595:    }
+        -:  596:
+        -:  597:    // Search right subtree recursively
+    #####:  598:    return find_hash(current->right, hash);
+        -:  599:}
+        -:  600:
+        -:  601:
+        -:  602:/*
+        -:  603: * Function that recursively gets all children from a specified hash's subtree
+        -:  604: * The chunks are stored in the bpkg query object and is returned
+        -:  605:*/
+       31:  606:struct bpkg_query bpkg_get_all_chunk_hashes_from_hash_helper(
+        -:  607:    struct merkle_tree_node* current) {
+       31:  608:    struct bpkg_query qry = {0};
+        -:  609:
+        -:  610:    // Base case (in case of some error)
+       31:  611:    if (current == NULL) {
+    #####:  612:        return qry;
+        -:  613:    }
+        -:  614:
+        -:  615:    // Base case: If a leaf is reached return the query object
+       31:  616:    if (current->is_leaf) {
+       16:  617:        qry.hashes = malloc(sizeof(char*));
+       16:  618:        qry.hashes[0] = malloc(SHA256_HEXLEN);
+       16:  619:        strncpy(qry.hashes[0], current->expected_hash, 64);
+       16:  620:        qry.len = 1;
+       16:  621:        return qry;
+        -:  622:    }
+        -:  623:
+        -:  624:    // Merge query object of left and right subtrees
+       15:  625:    struct bpkg_query left_qry = bpkg_get_all_chunk_hashes_from_hash_helper(
+        -:  626:        current->left);
+       15:  627:    struct bpkg_query right_qry = bpkg_get_all_chunk_hashes_from_hash_helper(
+        -:  628:        current->right);
+        -:  629:
+       15:  630:    qry.len = left_qry.len + right_qry.len;
+       15:  631:    qry.hashes = malloc(sizeof(char*) * qry.len);
+        -:  632:
+       15:  633:    int current_index = 0;
+        -:  634:
+       47:  635:    for (int i = 0; i < left_qry.len; i++) {
+       32:  636:        qry.hashes[current_index] = left_qry.hashes[i];
+       32:  637:        current_index++;
+        -:  638:    }
+       47:  639:    for (int i = 0; i < right_qry.len; i++) {
+       32:  640:        qry.hashes[current_index] = right_qry.hashes[i];
+       32:  641:        current_index++;
+        -:  642:    }
+        -:  643:
+        -:  644:    // Free the char* pointer
+       15:  645:    free(left_qry.hashes);
+       15:  646:    free(right_qry.hashes);
+        -:  647:
+       15:  648:    return qry;
+        -:  649:}
+        -:  650:
+        -:  651:/**
+        -:  652: * Retrieves all chunk hashes given a certain an ancestor hash (or itself)
+        -:  653: * Example: If the root hash was given, all chunk hashes will be outputted
+        -:  654: * 	If the root's left child hash was given, all chunks corresponding to
+        -:  655: * 	the first half of the file will be outputted
+        -:  656: * 	If the root's right child hash was given, all chunks corresponding to
+        -:  657: * 	the second half of the file will be outputted
+        -:  658: * @param bpkg, constructed bpkg object
+        -:  659: * @return query_result, This structure will contain a list of hashes
+        -:  660: * 		and the number of hashes that have been retrieved
+        -:  661: */
+        1:  662:struct bpkg_query bpkg_get_all_chunk_hashes_from_hash(struct bpkg_obj* bpkg, 
+        -:  663:    char* hash) {
+        1:  664:    struct bpkg_query qry = { 0 };
+        -:  665:
+        1:  666:    if (bpkg == NULL || hash == NULL) {
+    #####:  667:        return qry;
+        -:  668:    }
+        -:  669:
+        -:  670:    // Find the specified hash
+        1:  671:    struct merkle_tree_node* target = find_hash(bpkg->tree->root, hash);
+        -:  672:
+        -:  673:    // Hash does not exist
+        1:  674:    if (target == NULL) {
+    #####:  675:        return qry;
+        -:  676:    }
+        -:  677:
+        -:  678:    // Get all leaf nodes from this hash
+        1:  679:    qry = bpkg_get_all_chunk_hashes_from_hash_helper(target);
+        -:  680:
+        1:  681:    return qry;
+        -:  682:}
+        -:  683:
+        -:  684:/**
+        -:  685: * Deallocates the query result after it has been constructed from
+        -:  686: * the relevant queries above.
+        -:  687: */
+       12:  688:void bpkg_query_destroy(struct bpkg_query* qry) {
+       12:  689:    if (qry == NULL) {
+    #####:  690:        return; 
+        -:  691:    }
+        -:  692:
+       12:  693:    if (qry->hashes != NULL) {
+        -:  694:        // Free the hashes
+      229:  695:        for (int i = 0; i < qry->len; i++) {
+      218:  696:            if (qry->hashes[i] != NULL) {
+      218:  697:                free(qry->hashes[i]);
+        -:  698:            }
+        -:  699:        }
+        -:  700:        // Free the array of pointers
+       11:  701:        free(qry->hashes);
+        -:  702:    }
+        -:  703:
+       12:  704:    return;
+        -:  705:}
+        -:  706:
+        -:  707:/* 
+        -:  708: * Recursively deallocates memory for a merkle tree given a root
+        -:  709: */
+   132384:  710:void bpkg_tree_destroy(struct merkle_tree_node* root) {
+        -:  711:    // Base case
+   132384:  712:    if (root == NULL) {
+    66198:  713:        return;
+        -:  714:    }
+        -:  715:
+        -:  716:    // Free left and right subtrees
+    66186:  717:    bpkg_tree_destroy(root->left);
+    66186:  718:    bpkg_tree_destroy(root->right);
+        -:  719:    
+        -:  720:
+        -:  721:    // Free the node's memory
+    66186:  722:    if (root->key != NULL) {
+    #####:  723:        free(root->key);
+        -:  724:    }
+    66186:  725:    if (root->value != NULL) {
+    #####:  726:        free(root->value);
+        -:  727:    }
+    66186:  728:    free(root);
+        -:  729:}
+        -:  730:
+        -:  731:/**
+        -:  732: * Deallocates memory at the end of the program,
+        -:  733: * make sure it has been completely deallocated
+        -:  734: */
+       14:  735:void bpkg_obj_destroy(struct bpkg_obj* obj) {
+        -:  736:    
+       14:  737:    if (obj == NULL) {
+    #####:  738:        return;
+        -:  739:    }
+        -:  740:
+        -:  741:    // Free the hashes
+       14:  742:    if (obj->hashes != NULL) {
+        -:  743:        // Free the hash strings
+    33099:  744:        for (int i = 0; i < obj->nhashes; i++) {
+    33087:  745:            free(obj->hashes[i]);
+        -:  746:        }
+        -:  747:        // Free the array of pointers
+       12:  748:        free(obj->hashes);
+        -:  749:    }
+        -:  750:
+        -:  751:    // Free the chunks
+       14:  752:    free(obj->chunks);
+        -:  753:
+        -:  754:    // Free the merkle tree
+       14:  755:    if (obj->tree != NULL) {
+       12:  756:        bpkg_tree_destroy(obj->tree->root);
+       12:  757:        free(obj->tree);
+        -:  758:    }
+        -:  759:    
+       14:  760:    free(obj);
+        -:  761:
+        -:  762:}
+        -:  763:

@@ -1,0 +1,56 @@
+        -:    0:Source:src/cli.c
+        -:    1:#include "cli.h"
+        -:    2:
+        -:    3:/*
+        -:    4: * Function that checks what command input was given.
+        -:    5: * Returns the corresponding command type.
+        -:    6: */
+       65:    7:command_type get_command_type(char* command) {
+       65:    8:    switch(command[0]) {
+        8:    9:        case 'C':
+        8:   10:            if (strcmp(command, "CONNECT") == 0 || 
+        1:   11:            strcmp(command, "CONNECT\n") == 0)
+        8:   12:                return CONNECT;
+    #####:   13:            break;
+        3:   14:        case 'D':
+        3:   15:            if (strcmp(command, "DISCONNECT") == 0 || 
+        1:   16:            strcmp(command, "DISCONNECT\n") == 0)
+        3:   17:                return DISCONNECT;
+    #####:   18:            break;
+       12:   19:        case 'A':
+       12:   20:            if (strcmp(command, "ADDPACKAGE") == 0 || 
+        1:   21:            strcmp(command, "ADDPACKAGE\n") == 0)
+       12:   22:                return ADDPACKAGE;
+    #####:   23:            break;
+        4:   24:        case 'R':
+        4:   25:            if (strcmp(command, "REMPACKAGE") == 0 || 
+        1:   26:            strcmp(command, "REMPACKAGE\n") == 0)
+        4:   27:                return REMPACKAGE;
+    #####:   28:            break;
+       14:   29:        case 'P':
+       14:   30:            if (strcmp(command, "PACKAGES") == 0 || 
+       14:   31:            strcmp(command, "PACKAGES\n") == 0)
+       12:   32:                return PACKAGES;
+        2:   33:            else if (strcmp(command, "PEERS") == 0 || 
+        2:   34:            strcmp(command, "PEERS\n") == 0)
+        2:   35:                return PEERS;
+    #####:   36:            break;
+        9:   37:        case 'F':
+        9:   38:            if (strcmp(command, "FETCH") == 0 || 
+        1:   39:            strcmp(command, "FETCH\n") == 0)
+        9:   40:                return FETCH;
+    #####:   41:            break;
+       11:   42:        case 'Q':
+       11:   43:            if (strcmp(command, "QUIT") == 0 || 
+       11:   44:            strcmp(command, "QUIT\n") == 0)
+       11:   45:                return QUIT;
+    #####:   46:            break;
+        4:   47:        default:
+        4:   48:            return INVALID;
+        -:   49:    }
+    #####:   50:    return INVALID;
+        -:   51:}
+        -:   52:
+        -:   53:
+        -:   54:
+        -:   55:

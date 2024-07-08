@@ -1,0 +1,510 @@
+        -:    0:Source:src/peer.c
+        -:    1:#define _XOPEN_SOURCE 700
+        -:    2:#define _POSIX_C_SOURCE 200809L
+        -:    3:
+        -:    4:#define DATA_MAX 2998
+        -:    5:
+        -:    6:#include "dyn_array.h"
+        -:    7:#include "peer.h"
+        -:    8:
+        -:    9:/* 
+        -:   10: * Function that initialises a server socket 
+        -:   11: */
+       13:   12:int init_server_socket(in_port_t port_no) {
+       13:   13:    errno = 0;
+        -:   14:    // Create the socket
+       13:   15:    int server_sock_fd = socket(AF_INET, SOCK_STREAM, 0);
+       13:   16:    if (server_sock_fd < 0) {
+        -:   17:        // Error
+    #####:   18:        exit(1);
+        -:   19:    }
+        -:   20:
+        -:   21:    // Normal initialisation
+       13:   22:    struct sockaddr_in server_addr = {
+        -:   23:        .sin_family = AF_INET,
+        -:   24:        .sin_addr.s_addr = INADDR_ANY,
+       13:   25:        .sin_port = htons(port_no),
+        -:   26:    };
+        -:   27:
+       13:   28:    errno = 0;
+        -:   29:    // Bind attempt
+       13:   30:    int bind_res = bind(server_sock_fd, (const struct sockaddr *)(&server_addr),
+        -:   31:                        sizeof(struct sockaddr_in));
+       13:   32:    if (bind_res < 0) {
+        -:   33:        // Error
+        1:   34:        close(server_sock_fd);
+        1:   35:        exit(1);
+        -:   36:    }
+        -:   37:
+        -:   38:    // Success
+       12:   39:    return server_sock_fd;
+        -:   40:}
+        -:   41:
+        -:   42:
+        -:   43:/* This thread function is to handle one specific client connection
+        -:   44: * Receives packets and responds correspondingly.
+        -:   45: */
+        5:   46:void* server_handle_client(void *arg) {
+        5:   47:    struct client_thread_args *args = (struct client_thread_args *)arg;
+        -:   48:    // This struct contains the necessary data to read and write from the client
+        -:   49:    
+        5:   50:    struct dynamic_connection_array *connections = args->connections;
+        5:   51:    struct dynamic_package_array *packages = args->packages;
+        -:   52:
+        -:   53:    // This is the socket used to communicate with the client
+        5:   54:    int client_socket = args->client_sock_fd;
+        -:   55:
+        5:   56:    struct sockaddr_in address = args->client_addr;
+        -:   57:
+        -:   58:     // Allocate buffer for IP address
+        5:   59:    char client_ip_buffer[INET_ADDRSTRLEN] = {0};
+        5:   60:    inet_ntop(AF_INET, &args->client_addr.sin_addr, client_ip_buffer,
+        -:   61:             sizeof(client_ip_buffer));
+        -:   62:    
+        5:   63:    int new_port = ntohs(address.sin_port);
+        -:   64:
+        -:   65:    // First send the ACP packet to acknowledge acceptance
+        5:   66:    struct btide_packet ACP = generate_ACP();
+        -:   67:
+        5:   68:    if (send(client_socket, &ACP, sizeof(struct btide_packet), 0) == -1) {
+        -:   69:        // Error occured: could not send ACP packet back
+    #####:   70:        return NULL;
+        -:   71:    }
+        -:   72:
+        -:   73:    // Free the arguments
+        5:   74:    free(args);
+        -:   75:
+        -:   76:    // Loop while connection is valid
+       11:   77:    while (1) {
+        -:   78:        
+        -:   79:        // Waiting for packets from the socket
+       16:   80:        struct btide_packet current_packet = {0};
+        -:   81:
+        -:   82:        // Receive packet
+       16:   83:        if (recv(client_socket, &current_packet, sizeof(struct btide_packet), 
+        -:   84:            0) <= 0) {
+        -:   85:            // Error or socket has closed
+        4:   86:            break;
+        -:   87:        }
+        -:   88:
+        -:   89:        // Check what the packet is 
+        -:   90:
+        -:   91:        // If ACK, continue
+       12:   92:        if (current_packet.msg_code == PKT_MSG_ACK) {
+        5:   93:            continue;
+        -:   94:        }
+        7:   95:        if (current_packet.msg_code == PKT_MSG_DSN) {
+        -:   96:            // Package is a disconnect package 
+        1:   97:            remove_connection_array(connections, client_ip_buffer, new_port);
+        1:   98:            break;
+        -:   99:        }
+        6:  100:        if (current_packet.msg_code == PKT_MSG_PNG) {
+        -:  101:            // Send POG pack
+        1:  102:            struct btide_packet POG = generate_POG();
+        1:  103:            send(client_socket, &POG, sizeof(struct btide_packet), 0);
+        1:  104:            continue;
+        -:  105:        }
+       5*:  106:        if (current_packet.msg_code == PKT_MSG_POG) {
+    #####:  107:            continue;
+        -:  108:        }
+        5:  109:        if (current_packet.msg_code == PKT_MSG_REQ) {
+        -:  110:            // Received a REQ packet; send RES packets back
+        -:  111:            // Extract the data from the packet
+        5:  112:            uint32_t offset = 0;
+        5:  113:            uint32_t data_len = 0;
+        5:  114:            char hash[SHA256_HEXLEN] = {0};
+        5:  115:            char identifier[IDENT_LENGTH] = {0};
+        -:  116:
+        5:  117:            memcpy(&offset, current_packet.pl.data, sizeof(uint32_t));
+        5:  118:            memcpy(&data_len, current_packet.pl.data + sizeof(uint32_t), 
+        -:  119:                    sizeof(uint32_t));
+        5:  120:            memcpy(hash, current_packet.pl.data + 2 * sizeof(uint32_t), 
+        -:  121:                    SHA256_HEXLEN);
+        5:  122:            memcpy(identifier, 
+        -:  123:                    current_packet.pl.data + 2 * sizeof(uint32_t) 
+        -:  124:                    + SHA256_HEXLEN, IDENT_LENGTH-1);
+        -:  125:
+        -:  126:            // Handle sending RES packets in separate function
+        -:  127:            // Pass the required arguments
+        5:  128:            generate_and_send_RES(client_socket, identifier, hash, 
+        -:  129:                                    data_len, offset, packages);
+        -:  130:
+        -:  131:        }
+        5:  132:        if (current_packet.msg_code == PKT_MSG_RES) {
+        -:  133:            // Received a RES packet
+    #####:  134:            if (current_packet.error != 0) {
+        -:  135:                // Do nothing
+    #####:  136:                continue;
+        -:  137:            }
+        -:  138:            // Extract data from the packet
+    #####:  139:            uint32_t offset = 0;
+    #####:  140:            uint16_t data_len = 0;
+    #####:  141:            char hash[SHA256_HEXLEN] = {0};
+    #####:  142:            char identifier[IDENT_LENGTH] = {0};
+    #####:  143:            char data[DATA_MAX];
+        -:  144:
+    #####:  145:            memcpy(&offset, current_packet.pl.data, sizeof(uint32_t));
+    #####:  146:            memcpy(data, current_packet.pl.data + sizeof(uint32_t), DATA_MAX);
+    #####:  147:            memcpy(&data_len, current_packet.pl.data + DATA_MAX + 
+        -:  148:                    sizeof(uint32_t), sizeof(uint16_t));
+    #####:  149:            memcpy(hash, current_packet.pl.data + DATA_MAX + 
+        -:  150:                    sizeof(uint32_t) + sizeof(uint16_t), SHA256_HEXLEN);
+    #####:  151:            memcpy(identifier, current_packet.pl.data + DATA_MAX + 
+        -:  152:                    sizeof(uint32_t) + sizeof(uint16_t) + SHA256_HEXLEN, 
+        -:  153:                    IDENT_LENGTH-1);
+        -:  154:
+        -:  155:            // Write the data to the corresponding data file
+    #####:  156:            struct bpkg_obj *package = get_package(packages, identifier);
+        -:  157:
+    #####:  158:            if (package == NULL) {
+        -:  159:                // Some kind of error
+    #####:  160:                continue;
+        -:  161:            }
+        -:  162:
+        -:  163:            // Check if the file exists in the directory, otherwise create it
+    #####:  164:            struct bpkg_query temp = bpkg_file_check(package);
+    #####:  165:            bpkg_query_destroy(&temp);
+        -:  166:
+        -:  167:            // Write the data to the file
+    #####:  168:            FILE *file = fopen(package->filename, "rb+");
+        -:  169:
+        -:  170:            // Seek to the specified offset within the file
+    #####:  171:            if (fseek(file, offset, SEEK_SET) != 0) {
+        -:  172:                // Malformed file, some error
+    #####:  173:                fclose(file);
+    #####:  174:                continue; 
+        -:  175:            }
+        -:  176:
+    #####:  177:            fwrite(data, 1, data_len, file);
+    #####:  178:            fclose(file);
+        -:  179:        }
+        -:  180:
+        -:  181:    }
+        -:  182:
+        -:  183:    // Close the connection
+        -:  184:    // Remove the connection from the connections array (set it to disconnected)
+        5:  185:    set_disconnected(connections, client_ip_buffer, new_port);
+        5:  186:    close(client_socket);
+        -:  187:    
+        5:  188:    return NULL;
+        -:  189:
+        -:  190:}
+        -:  191:
+        -:  192: /*
+        -:  193:  * This is for a server thread function
+        -:  194:  * Loops and waits for connections until it connects to one, and then creates a 
+        -:  195:  * new thread to handle this connection
+        -:  196:  */
+       12:  197:void* server_loop(void *arg) {
+       12:  198:    struct server_loop_arguments *args = (struct server_loop_arguments*)(arg);
+        -:  199:
+       12:  200:    struct dynamic_connection_array *connections = args->connections;
+       12:  201:    struct dynamic_package_array *packages = args->packages;
+       12:  202:    struct thread_array *threads = args->threads;
+        -:  203:
+        -:  204:    // Set up the server
+       12:  205:    int server_sock_fd = args->server_socket;
+        -:  206:
+        -:  207:    // Start listening
+       12:  208:    int MAX_PEERS = args->MAX_PEERS;
+        -:  209:
+       12:  210:    errno = 0;
+       12:  211:    if (listen(server_sock_fd, MAX_PEERS) < 0) {
+        -:  212:        // Error
+    #####:  213:        close(server_sock_fd);
+    #####:  214:        exit(1);
+        -:  215:    }
+        -:  216:
+        -:  217:    // Infinite loop to get client connections
+        -:  218:    // Thread needs to be able to exit when the socket connection is closed
+        5:  219:    while (1) {
+        -:  220:        // Accept a client and make a new thread
+       17:  221:        struct sockaddr_in client_addr = {0};
+        -:  222:
+        -:  223:        // Accept the connection
+       17:  224:        errno = 0;
+       17:  225:        int client_sock_fd = accept(server_sock_fd,
+        -:  226:        (struct sockaddr *)&client_addr,
+       17:  227:        &(socklen_t){sizeof(struct sockaddr_in)});
+        -:  228:
+       17:  229:        if (client_sock_fd < 0) {
+        -:  230:            // Error with connection
+       12:  231:            break;
+        -:  232:        }
+        -:  233:
+        -:  234:        // Check if we have maximum connections
+        -:  235:        // Cannot accept any connections if this condition is true
+        -:  236:        // Instantly disconnect
+       5*:  237:        if (connections_true_size(connections) == connections->max_peers) {
+    #####:  238:            close(client_sock_fd);
+    #####:  239:            continue;
+        -:  240:        }
+        -:  241:
+        5:  242:        int new_port = ntohs(client_addr.sin_port);
+        -:  243:
+        -:  244:        // Add the socket to the connections array
+        5:  245:        struct connection_info connection = {client_sock_fd, new_port};
+        5:  246:        connection.ip_address = malloc(INET_ADDRSTRLEN);
+        5:  247:        inet_ntop(AF_INET, &(client_addr.sin_addr), connection.ip_address,
+        -:  248:                             INET_ADDRSTRLEN);
+        -:  249:        
+        -:  250:        // Set default connection status to 1
+        -:  251:        // Server connections will always be automatically connected 
+        -:  252:        // as they just send ACP messages; don't receive ACK to confirm
+        5:  253:        connection.connected = 1;
+        -:  254:
+        5:  255:        append_dynamic_connection_array(connections, connection);
+        -:  256:
+        -:  257:        // Otherwise, a succesful connection to the client, create a new thread
+        -:  258:        // to handle this connection
+        5:  259:        pthread_t new_thread;
+        -:  260:        
+        -:  261:        // Struct to pass to thread function
+        -:  262:        struct client_thread_args *thread_args = 
+        5:  263:        malloc(sizeof(struct client_thread_args));
+        -:  264:        // Need to pass required arguments
+        5:  265:        thread_args->client_sock_fd = client_sock_fd;
+        5:  266:        memcpy(&thread_args->client_addr, &client_addr, 
+        -:  267:        sizeof(struct sockaddr_in));
+        5:  268:        thread_args->connections = connections;
+        5:  269:        thread_args->packages = packages;
+        -:  270:        
+        -:  271:
+        -:  272:        // Create the thread
+        5:  273:        if (pthread_create(&new_thread, NULL, server_handle_client, 
+        -:  274:        thread_args) != 0) {
+        -:  275:            // Error creating thread
+    #####:  276:            perror("Error creating server thread.\n");
+    #####:  277:            close(client_sock_fd);
+    #####:  278:            exit(1);
+        -:  279:        }
+        -:  280:
+        -:  281:        
+        -:  282:        // Thread should now be running and managing that connection
+        5:  283:        append_thread_array(threads, new_thread);
+        -:  284:    }
+        -:  285:
+        -:  286:    // Socket closed
+       12:  287:    close(server_sock_fd);
+        -:  288:    // Don't need to close the client socket: the other threads will
+        -:  289:    
+       12:  290:    return NULL;
+        -:  291:}
+        -:  292:
+        -:  293:/*
+        -:  294: * This thread is responsible for outgoing connections (when our program wants 
+        -:  295: * to connect with others and is the client).
+        -:  296: * Creates a client socket and connects to the server 
+        -:  297: */
+        5:  298:void* client_handle_server(void *arg) {
+        5:  299:    struct client_thread_args *args = (struct client_thread_args *)arg;
+        -:  300:
+        -:  301:    // Has access to all connections/packages via args
+        5:  302:    struct dynamic_connection_array *connections = args->connections;
+        5:  303:    struct dynamic_package_array *packages = args->packages;
+        -:  304:    
+        -:  305:    // Client port created in the create_client_thread function
+        5:  306:    int client_socket = args->client_sock_fd;
+        -:  307:
+        5:  308:    struct sockaddr_in address = args->client_addr;
+        -:  309:     // Allocate buffer for IP address
+        5:  310:    char server_ip_buffer[INET_ADDRSTRLEN] = {0};
+        5:  311:    inet_ntop(AF_INET, &(address.sin_addr), server_ip_buffer, INET_ADDRSTRLEN);
+        -:  312:    // Get the port
+        5:  313:    int port = ntohs(address.sin_port);
+        -:  314:
+        -:  315:    // Free arguments
+        5:  316:    free(args);
+        -:  317:
+       11:  318:    while (1) {
+        -:  319:        // Waiting for packets from the socket
+       16:  320:        struct btide_packet current_packet = {0};
+        -:  321:
+        -:  322:        // Receive packet
+       16:  323:        if (recv(client_socket, &current_packet, sizeof(struct btide_packet), 
+        -:  324:            0) <= 0) {
+        -:  325:            // Connection has shutdown for whatever reason
+        5:  326:            break;
+        -:  327:        }
+        -:  328:
+        -:  329:        // Check what the packet is 
+        -:  330:        // If ACP, send an ACK packet back
+       11:  331:        if (current_packet.msg_code == PKT_MSG_ACP) {
+        5:  332:            printf("Connection established with peer\n");
+        5:  333:            struct btide_packet ACK = generate_ACK();
+        5:  334:            send(client_socket, &ACK, sizeof(struct btide_packet), 0);
+        -:  335:            // Set the connection to connected for this specific connection
+        5:  336:            set_connected(connections, server_ip_buffer, port);
+        5:  337:            continue;
+        -:  338:        }
+        -:  339:
+        6:  340:        if (current_packet.msg_code == PKT_MSG_DSN) {
+        -:  341:            // Package is a disconnect package 
+    #####:  342:            remove_connection_array(connections, server_ip_buffer, port);
+    #####:  343:            break;
+        -:  344:        }
+        -:  345:
+       6*:  346:        if (current_packet.msg_code == PKT_MSG_PNG) {
+        -:  347:            // Send POG pack
+    #####:  348:            struct btide_packet POG = generate_POG();
+    #####:  349:            send(client_socket, &POG, sizeof(struct btide_packet), 0);
+    #####:  350:            continue;
+        -:  351:        }
+        -:  352:
+        6:  353:        if (current_packet.msg_code == PKT_MSG_POG) {
+        1:  354:            continue;
+        -:  355:        }
+        -:  356:
+        5:  357:        if (current_packet.msg_code == PKT_MSG_REQ) {
+        -:  358:            // Received a REQ packet; send RES packets back
+        -:  359:            // Extract the data from the packet
+    #####:  360:            uint32_t offset = 0;
+    #####:  361:            uint32_t data_len = 0;
+    #####:  362:            char hash[SHA256_HEXLEN] = {0};
+    #####:  363:            char identifier[IDENT_LENGTH] = {0};
+        -:  364:
+    #####:  365:            memcpy(&offset, current_packet.pl.data, sizeof(uint32_t));
+    #####:  366:            memcpy(&data_len, current_packet.pl.data + sizeof(uint32_t), 
+        -:  367:                    sizeof(uint32_t));
+    #####:  368:            memcpy(hash, current_packet.pl.data + 2 * sizeof(uint32_t), 
+        -:  369:                    SHA256_HEXLEN);
+    #####:  370:            memcpy(identifier, 
+        -:  371:                    current_packet.pl.data + 2 * sizeof(uint32_t) 
+        -:  372:                    + SHA256_HEXLEN, IDENT_LENGTH-1);
+        -:  373:
+        -:  374:            // Handle sending RES packets in separate function
+        -:  375:            // Pass the required arguments
+    #####:  376:            generate_and_send_RES(client_socket, identifier, hash, 
+        -:  377:                                    data_len, offset, packages);
+        -:  378:
+        -:  379:        }
+        5:  380:        if (current_packet.msg_code == PKT_MSG_RES) {
+        -:  381:            // Received a RES packet
+        5:  382:            if (current_packet.error != 0) {
+        -:  383:                // Do nothing
+        3:  384:                continue;
+        -:  385:            }
+        -:  386:            // Extract data from the packet
+        2:  387:            uint32_t offset = 0;
+        2:  388:            uint16_t data_len = 0;
+        2:  389:            char hash[SHA256_HEXLEN] = {0};
+        2:  390:            char identifier[IDENT_LENGTH] = {0};
+        2:  391:            char data[DATA_MAX];
+        -:  392:
+        2:  393:            memcpy(&offset, current_packet.pl.data, sizeof(uint32_t));
+        -:  394:
+        2:  395:            memcpy(data, current_packet.pl.data + sizeof(uint32_t), DATA_MAX);
+        -:  396:
+        2:  397:            memcpy(&data_len, current_packet.pl.data + DATA_MAX + 
+        -:  398:                    sizeof(uint32_t), sizeof(uint16_t));
+        -:  399:
+        2:  400:            memcpy(hash, current_packet.pl.data + DATA_MAX + 
+        -:  401:                    sizeof(uint32_t) + sizeof(uint16_t), SHA256_HEXLEN);
+        -:  402:
+        2:  403:            memcpy(identifier, current_packet.pl.data + DATA_MAX + 
+        -:  404:                    sizeof(uint32_t) + sizeof(uint16_t) + SHA256_HEXLEN, 
+        -:  405:                    IDENT_LENGTH-1);
+        -:  406:
+        -:  407:            // Write the data to the corresponding data file
+        2:  408:            struct bpkg_obj *package = get_package(packages, identifier);
+        -:  409:
+       2*:  410:            if (package == NULL) {
+        -:  411:                // Some kind of error
+    #####:  412:                continue;
+        -:  413:            }
+        -:  414:
+        -:  415:            // Check if the file exists in the directory, otherwise create it
+        2:  416:            struct bpkg_query temp = bpkg_file_check(package);
+        2:  417:            bpkg_query_destroy(&temp);
+        -:  418:
+        -:  419:            // Write the data to the file
+        2:  420:            FILE *file = fopen(package->filename, "rb+");
+        -:  421:
+        -:  422:            // Seek to the specified offset within the file
+       2*:  423:            if (fseek(file, offset, SEEK_SET) != 0) {
+        -:  424:                // Malformed file, some error
+    #####:  425:                fclose(file);
+    #####:  426:                continue; 
+        -:  427:            }
+        -:  428:
+        2:  429:            fwrite(data, 1, data_len, file);
+        2:  430:            fclose(file);
+        -:  431:        }
+        -:  432:
+        -:  433:    }
+        -:  434:
+        -:  435:    // Connection closed
+        -:  436:
+        -:  437:    // Set connection to disconnected
+        5:  438:    set_disconnected(connections, server_ip_buffer, port);
+        5:  439:    close(client_socket);
+        -:  440:
+        5:  441:    return NULL;
+        -:  442:
+        -:  443:}
+        -:  444:
+        -:  445:/* 
+        -:  446: * Function that creates a thread to handle a new client connection
+        -:  447: * Returns the file descriptor for the created socket.
+        -:  448: */
+        7:  449:int create_client_thread(int port_to_connect, char* ip_address, 
+        -:  450:                            struct dynamic_connection_array *connections,
+        -:  451:                            struct dynamic_package_array *packages,
+        -:  452:                            struct thread_array *threads) {
+        -:  453:
+        7:  454:    pthread_t new_thread;
+        -:  455:
+        7:  456:    struct sockaddr_in serv_addr;
+        -:  457:    // Configure server address
+        7:  458:    serv_addr.sin_family = AF_INET;
+        7:  459:    serv_addr.sin_port = htons(port_to_connect);
+        -:  460:
+        -:  461:    // Convert IPv4 and IPv6 addresses from text to binary form
+        7:  462:    if (inet_pton(AF_INET, ip_address, &serv_addr.sin_addr) <= 0) {
+        1:  463:        return -1;
+        -:  464:    }
+        -:  465:    
+        6:  466:    int client_socket = 0;
+        -:  467:    
+        -:  468:    // Create socket file descriptor
+        6:  469:    if ((client_socket = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
+    #####:  470:        return -1;
+        -:  471:    }
+        -:  472:
+        -:  473:    // Connect to the server
+        6:  474:    if (connect(client_socket, (struct sockaddr *)&serv_addr, 
+        -:  475:        sizeof(serv_addr)) < 0) {
+        1:  476:        return -1;
+        -:  477:    }
+        -:  478:
+        -:  479:    struct client_thread_args *thread_args = 
+        5:  480:    malloc(sizeof(struct client_thread_args));
+        -:  481:    
+        -:  482:    // Add the socket to the connections array
+        5:  483:    struct connection_info connection = {client_socket, port_to_connect, 
+        5:  484:    strdup(ip_address)};
+        -:  485:
+        -:  486:    // Set default connection status to 0: need to wait for ACP packet
+        5:  487:    connection.connected = 0;
+        5:  488:    append_dynamic_connection_array(connections, connection);
+        -:  489:
+        -:  490:    // Pass information to handler thread
+        5:  491:    thread_args->client_sock_fd = client_socket;
+        5:  492:    memcpy(&thread_args->client_addr, &serv_addr, sizeof(struct sockaddr_in));
+        5:  493:    thread_args->connections = connections;
+        5:  494:    thread_args->packages = packages;
+        -:  495:
+        -:  496:    // Create the thread
+        5:  497:    if (pthread_create(&new_thread, NULL, client_handle_server, 
+        -:  498:    thread_args) != 0) {
+        -:  499:        // Error creating thread
+    #####:  500:        perror("Error creating client thread.\n");
+    #####:  501:        return -1;
+        -:  502:    }
+        -:  503:
+        5:  504:    append_thread_array(threads, new_thread);
+        -:  505:
+        -:  506:    // Thread should now be running and managing that connection
+        5:  507:    return client_socket;
+        -:  508:
+        -:  509:}
