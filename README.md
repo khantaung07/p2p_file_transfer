@@ -2,7 +2,7 @@
 Peer-to-peer file transfer program for Unix systems using SHA-256 hashing and 
 merkle tree structure for file validation. 
 
-Program structure
+# Progrma information
 The program relies on package files (.bpkg), which outline the metadata of the
  specific file it refers to. 
 This includes an identifier, filename, size, nhashes (number of SHA-256 hashes),
@@ -12,7 +12,15 @@ hashes, nchunks (number of chunks of information: the leaves of the merkle tree)
 These .bpkg files can be created using the pkgmake program, and should be 
 distributed to allow file transfer.
 
+# How to run
+Compile the program using make btide.
+```bash
+make btide
+```
 Program is run using './btide \<config file name\>'
+```bash
+./btide config.cfg
+```
 
 The configuration file will use the following information: 
 * directory: path local to the system that store .bpkg files and the files that 
@@ -21,9 +29,10 @@ create it.
 * max_peers: The number of peers the program can be connected to.
 * port: The port the client will be listening on.
 
-Commands:
-
+# Commands
+```bash
 CONNECT \<ip:port\>
+```
 * Connect to a peer
 
 DISCONNECT \<ip:port\>
